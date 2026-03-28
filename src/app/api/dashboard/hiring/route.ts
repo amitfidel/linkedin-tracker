@@ -1,3 +1,4 @@
+export const dynamic = "force-dynamic";
 import { NextResponse } from "next/server";
 import { getHiringTrends } from "@/lib/analysis/hiring-trends";
 

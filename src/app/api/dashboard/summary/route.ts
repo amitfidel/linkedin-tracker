@@ -1,3 +1,4 @@
+export const dynamic = "force-dynamic";
 import { NextResponse } from "next/server";
 import { generateAISummary } from "@/lib/analysis/ai-summarizer";
 
