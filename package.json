@@ -15,7 +15,6 @@
     "@libsql/client": "^0.17.2",
     "@tailwindcss/typography": "^0.5.19",
     "apify-client": "^2.22.3",
-    "better-sqlite3": "^12.8.0",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "drizzle-orm": "^0.45.2",
@@ -34,7 +33,6 @@
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",
-    "@types/better-sqlite3": "^7.6.13",
     "@types/node": "^20",
     "@types/node-cron": "^3.0.11",
     "@types/react": "^19",
