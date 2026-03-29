@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useRef } from "react";
+import { useRouter } from "next/navigation";
 import { useTheme } from "next-themes";
 import { Button } from "@/components/ui/button";
 import { Sun, Moon, Play, Loader2, CheckCircle2, XCircle, AlertTriangle } from "lucide-react";
@@ -37,6 +38,7 @@ function formatElapsed(s: number) {
 }
 
 export function Header() {
+  const router = useRouter();
   const { theme, setTheme } = useTheme();
   const [phase, setPhase] = useState<ScrapePhase>("idle");
   const [activeRun, setActiveRun] = useState<ScrapeRun | null>(null);
@@ -80,6 +82,8 @@ export function Header() {
             )} · ${latest.companiesCount ?? 0} companies · $${(latest.creditsUsed ?? 0).toFixed(4)}`
           );
         }
+        // Refresh page data so new scrape results appear automatically
+        router.refresh();
         // Auto-reset button after 8 seconds
         setTimeout(() => {
           setPhase("idle");
