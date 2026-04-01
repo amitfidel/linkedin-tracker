@@ -288,27 +288,54 @@ export async function runPipeline(triggerType: "manual" | "scheduled") {
     if (gartnerCompanies.length > 0 && process.env.GARTNER_EMAIL) {
       for (const company of gartnerCompanies) {
         try {
-          const insights = await scrapeGartnerInsights(company.gartnerUrl!);
+          // Fetch already-scraped review URLs so the scraper can skip them
+          const existingRows = await db
+            .select({ reviewUrl: gartnerInsights.reviewUrl })
+            .from(gartnerInsights)
+            .where(eq(gartnerInsights.companyId, company.id));
+          const existingReviewUrls = new Set(
+            existingRows.map((r) => r.reviewUrl).filter(Boolean) as string[]
+          );
+
+          const insights = await scrapeGartnerInsights(company.gartnerUrl!, existingReviewUrls);
           let newCount = 0;
           for (const insight of insights) {
             const hash = await sha256(insight.text);
-            const existing = await db
-              .select({ id: gartnerInsights.id })
-              .from(gartnerInsights)
-              .where(
-                and(
-                  eq(gartnerInsights.companyId, company.id),
-                  eq(gartnerInsights.textHash, hash)
-                )
-              )
-              .get();
-            if (!existing) {
+            // Dedup by reviewUrl first, then fall back to textHash
+            const existingByUrl = insight.reviewUrl
+              ? await db
+                  .select({ id: gartnerInsights.id })
+                  .from(gartnerInsights)
+                  .where(
+                    and(
+                      eq(gartnerInsights.companyId, company.id),
+                      eq(gartnerInsights.reviewUrl, insight.reviewUrl)
+                    )
+                  )
+                  .get()
+              : null;
+            const existingByHash = existingByUrl
+              ? null
+              : await db
+                  .select({ id: gartnerInsights.id })
+                  .from(gartnerInsights)
+                  .where(
+                    and(
+                      eq(gartnerInsights.companyId, company.id),
+                      eq(gartnerInsights.textHash, hash)
+                    )
+                  )
+                  .get();
+            if (!existingByUrl && !existingByHash) {
               await db.insert(gartnerInsights).values({
                 companyId: company.id,
                 scrapeRunId: runId,
                 type: insight.type,
                 text: insight.text,
                 textHash: hash,
+                reviewUrl: insight.reviewUrl,
+                reviewerRole: insight.reviewerRole,
+                reviewerIndustry: insight.reviewerIndustry,
                 scrapedAt: new Date().toISOString(),
               });
               newCount++;

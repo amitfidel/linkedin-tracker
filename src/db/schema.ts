@@ -151,7 +151,8 @@ export const gartnerInsights = sqliteTable(
     scrapeRunId: integer("scrape_run_id").references(() => scrapeRuns.id),
     type: text("type").notNull(), // 'like' or 'dislike'
     text: text("text").notNull(),
-    textHash: text("text_hash").notNull(), // SHA-256 for dedup
+    textHash: text("text_hash").notNull(), // SHA-256 of full text
+    reviewUrl: text("review_url"), // canonical dedup key (review page URL)
     reviewerRole: text("reviewer_role"),
     reviewerIndustry: text("reviewer_industry"),
     scrapedAt: text("scraped_at").default(sql`CURRENT_TIMESTAMP`),
