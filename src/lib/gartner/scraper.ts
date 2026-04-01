@@ -11,17 +11,9 @@ export interface GartnerInsight {
 const GARTNER_LOGIN_URL = "https://www.gartner.com/reviews/authenticate#login";
 
 function getChromiumPath(): string | undefined {
-  const fs = require("fs") as typeof import("fs");
-  const candidates = [
-    "/run/current-system/sw/bin/chromium",
-    "/usr/bin/chromium",
-    "/usr/bin/chromium-browser",
-    "/usr/bin/google-chrome",
-  ];
-  for (const p of candidates) {
-    if (fs.existsSync(p)) return p;
-  }
-  return undefined;
+  // Let Playwright use its own installed chromium (via `npx playwright install chromium`).
+  // Only override if a system binary is explicitly set via env var.
+  return process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH ?? undefined;
 }
 
 async function loginToGartner(page: import("playwright-core").Page): Promise<boolean> {
