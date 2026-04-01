@@ -19,16 +19,51 @@ function getChromiumPath(): string | undefined {
 async function loginToGartner(page: import("playwright-core").Page): Promise<boolean> {
   const email = process.env.GARTNER_EMAIL;
   const password = process.env.GARTNER_PASSWORD;
-  if (!email || !password) return false;
+  if (!email || !password) {
+    console.warn("[Gartner] GARTNER_EMAIL or GARTNER_PASSWORD not set");
+    return false;
+  }
 
   await page.goto(GARTNER_LOGIN_URL, { waitUntil: "domcontentloaded", timeout: 30000 });
+
   try {
-    await page.fill('input[type="email"], input[name="email"], #username', email, { timeout: 10000 });
-    await page.fill('input[type="password"], input[name="password"], #password', password, { timeout: 5000 });
-    await page.click('button[type="submit"], input[type="submit"]', { timeout: 5000 });
-    await page.waitForURL((url) => !url.toString().includes("authenticate"), { timeout: 15000 });
+    // Step 1: fill email
+    const emailInput = await page.waitForSelector(
+      'input[type="email"], input[name="email"], input[name="username"], #username, #email',
+      { timeout: 10000 }
+    );
+    await emailInput.fill(email);
+
+    // Click "Next" / "Continue" / "Sign in" — whatever advances past the email step
+    await page.click(
+      'button[type="submit"], input[type="submit"], button:has-text("Next"), button:has-text("Continue"), button:has-text("Sign in")',
+      { timeout: 5000 }
+    );
+
+    // Step 2: password field may appear on same page or next page
+    const passwordInput = await page.waitForSelector(
+      'input[type="password"], input[name="password"], #password',
+      { timeout: 10000 }
+    );
+    await passwordInput.fill(password);
+
+    // Submit the password
+    await page.click(
+      'button[type="submit"], input[type="submit"], button:has-text("Sign in"), button:has-text("Log in")',
+      { timeout: 5000 }
+    );
+
+    // Wait for successful redirect away from login page
+    await page.waitForURL(
+      (url) => !url.toString().includes("authenticate") && !url.toString().includes("login"),
+      { timeout: 20000 }
+    );
+
+    console.log("[Gartner] Login successful, current URL:", page.url());
     return true;
-  } catch {
+  } catch (e) {
+    console.warn("[Gartner] Login failed:", e instanceof Error ? e.message : e);
+    console.warn("[Gartner] Current URL at failure:", page.url());
     return false;
   }
 }
