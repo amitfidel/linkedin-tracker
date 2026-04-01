@@ -1,2 +1,2 @@
 [phases.setup]
-nixPkgs = ["nodejs_20", "chromium", "nss", "nspr", "cups", "libdrm", "libxkbcommon", "pango", "cairo", "gdk-pixbuf2", "mesa", "alsa-lib"]
+nixPkgs = ["nodejs_20", "chromium", "nss", "nspr", "cups", "libdrm", "libxkbcommon", "pango", "cairo", "gdk-pixbuf", "mesa", "alsa-lib"]
