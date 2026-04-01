@@ -24,34 +24,20 @@ async function loginToGartner(page: import("playwright-core").Page): Promise<boo
     return false;
   }
 
-  await page.goto(GARTNER_LOGIN_URL, { waitUntil: "domcontentloaded", timeout: 30000 });
+  await page.goto(GARTNER_LOGIN_URL, { waitUntil: "networkidle", timeout: 30000 });
 
   try {
-    // Step 1: fill email
-    const emailInput = await page.waitForSelector(
-      'input[type="email"], input[name="email"], input[name="username"], #username, #email',
-      { timeout: 10000 }
-    );
-    await emailInput.fill(email);
+    // Step 1: fill email using label-based locator (robust across frameworks)
+    await page.getByLabel("Email").fill(email);
 
-    // Step 2: click "Log in with password instead" to switch to password mode
-    await page.click(
-      'a:has-text("Log in with password instead"), button:has-text("Log in with password instead"), a:has-text("password instead")',
-      { timeout: 8000 }
-    );
+    // Step 2: click "Log in with password instead"
+    await page.getByText("Log in with password instead").click({ timeout: 8000 });
 
-    // Step 3: fill password (now visible after switching mode)
-    const passwordInput = await page.waitForSelector(
-      'input[type="password"], input[name="password"], #password',
-      { timeout: 10000 }
-    );
-    await passwordInput.fill(password);
+    // Step 3: fill password
+    await page.getByLabel("Password").fill(password);
 
-    // Step 4: submit
-    await page.click(
-      'button[type="submit"], input[type="submit"], button:has-text("Sign in"), button:has-text("Log in")',
-      { timeout: 5000 }
-    );
+    // Step 4: submit — click the visible submit/sign-in button
+    await page.getByRole("button", { name: /sign in|log in/i }).click({ timeout: 5000 });
 
     // Wait for successful redirect away from login page
     await page.waitForURL(
@@ -64,6 +50,12 @@ async function loginToGartner(page: import("playwright-core").Page): Promise<boo
   } catch (e) {
     console.warn("[Gartner] Login failed:", e instanceof Error ? e.message : e);
     console.warn("[Gartner] Current URL at failure:", page.url());
+    // Take a screenshot of what we see for debugging
+    try {
+      const html = await page.content();
+      const inputTags = html.match(/<input[^>]*>/gi)?.slice(0, 5).join("\n") ?? "no inputs found";
+      console.warn("[Gartner] Input tags found:", inputTags);
+    } catch {}
     return false;
   }
 }
