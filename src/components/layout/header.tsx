@@ -10,7 +10,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { Sun, Moon, Play, Loader2, CheckCircle2, XCircle, AlertTriangle, ChevronDown, Star } from "lucide-react";
+import { Sun, Moon, Play, Loader2, CheckCircle2, XCircle, AlertTriangle, ChevronDown, Star, Database } from "lucide-react";
 import { toast } from "sonner";
 
 interface ScrapeRun {
@@ -183,15 +183,11 @@ export function Header() {
             {buttonContent()}
           </Button>
           <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button
-                variant="outline"
-                size="sm"
-                disabled={isDisabled}
-                className="rounded-l-none px-2"
-              >
-                <ChevronDown className="h-3.5 w-3.5" />
-              </Button>
+            <DropdownMenuTrigger
+              disabled={isDisabled}
+              className="inline-flex items-center justify-center rounded-r-md rounded-l-none border border-l-0 border-input bg-background px-2 py-1.5 text-sm font-medium shadow-xs transition-colors hover:bg-accent hover:text-accent-foreground disabled:pointer-events-none disabled:opacity-50"
+            >
+              <ChevronDown className="h-3.5 w-3.5" />
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end">
               <DropdownMenuItem onClick={() => handleScrape("full")}>
