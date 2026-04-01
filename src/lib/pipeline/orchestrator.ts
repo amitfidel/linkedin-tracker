@@ -394,3 +394,93 @@ export async function runPipeline(triggerType: "manual" | "scheduled") {
     return { runId, status: "failed", error: message };
   }
 }
+
+export async function runGartnerOnly() {
+  const [run] = await db
+    .insert(scrapeRuns)
+    .values({ triggerType: "manual", status: "running", startedAt: new Date().toISOString() })
+    .returning();
+
+  const runId = run.id;
+  const stepErrors: string[] = [];
+
+  try {
+    const activeCompanies = await db.select().from(companies).where(eq(companies.isActive, true));
+    const gartnerCompanies = activeCompanies.filter((c) => c.gartnerUrl);
+
+    if (gartnerCompanies.length === 0 || !process.env.GARTNER_EMAIL) {
+      await db.update(scrapeRuns).set({
+        status: "completed",
+        completedAt: new Date().toISOString(),
+        companiesCount: 0,
+        stepErrors: JSON.stringify(["No companies with Gartner URL or credentials not set"]),
+      }).where(eq(scrapeRuns.id, runId));
+      return { runId, status: "completed" };
+    }
+
+    for (const company of gartnerCompanies) {
+      try {
+        const existingRows = await db
+          .select({ reviewUrl: gartnerInsights.reviewUrl })
+          .from(gartnerInsights)
+          .where(eq(gartnerInsights.companyId, company.id));
+        const existingReviewUrls = new Set(
+          existingRows.map((r) => r.reviewUrl).filter(Boolean) as string[]
+        );
+
+        const insights = await scrapeGartnerInsights(company.gartnerUrl!, existingReviewUrls);
+        let newCount = 0;
+        for (const insight of insights) {
+          const hash = await sha256(insight.text);
+          const existingByUrl = insight.reviewUrl
+            ? await db.select({ id: gartnerInsights.id }).from(gartnerInsights)
+                .where(and(eq(gartnerInsights.companyId, company.id), eq(gartnerInsights.reviewUrl, insight.reviewUrl)))
+                .get()
+            : null;
+          const existingByHash = existingByUrl
+            ? null
+            : await db.select({ id: gartnerInsights.id }).from(gartnerInsights)
+                .where(and(eq(gartnerInsights.companyId, company.id), eq(gartnerInsights.textHash, hash)))
+                .get();
+          if (!existingByUrl && !existingByHash) {
+            await db.insert(gartnerInsights).values({
+              companyId: company.id,
+              scrapeRunId: runId,
+              type: insight.type,
+              text: insight.text,
+              textHash: hash,
+              reviewUrl: insight.reviewUrl,
+              reviewerRole: insight.reviewerRole,
+              reviewerIndustry: insight.reviewerIndustry,
+              scrapedAt: new Date().toISOString(),
+            });
+            newCount++;
+          }
+        }
+        console.log(`[Gartner] ${company.name}: ${insights.length} total, ${newCount} new`);
+      } catch (e) {
+        const msg = `Gartner scrape (${company.name}): ${e instanceof Error ? e.message : String(e)}`;
+        console.error(msg);
+        stepErrors.push(msg);
+      }
+    }
+
+    await db.update(scrapeRuns).set({
+      status: stepErrors.length > 0 ? "completed" : "completed",
+      completedAt: new Date().toISOString(),
+      companiesCount: gartnerCompanies.length,
+      creditsUsed: 0,
+      stepErrors: stepErrors.length > 0 ? JSON.stringify(stepErrors) : null,
+    }).where(eq(scrapeRuns.id, runId));
+
+    return { runId, status: "completed", stepErrors };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Unknown error";
+    await db.update(scrapeRuns).set({
+      status: "failed",
+      completedAt: new Date().toISOString(),
+      errorMessage: message,
+    }).where(eq(scrapeRuns.id, runId));
+    return { runId, status: "failed", error: message };
+  }
+}

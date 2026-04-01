@@ -4,7 +4,13 @@ import { useState, useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { useTheme } from "next-themes";
 import { Button } from "@/components/ui/button";
-import { Sun, Moon, Play, Loader2, CheckCircle2, XCircle, AlertTriangle } from "lucide-react";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { Sun, Moon, Play, Loader2, CheckCircle2, XCircle, AlertTriangle, ChevronDown, Star } from "lucide-react";
 import { toast } from "sonner";
 
 interface ScrapeRun {
@@ -113,15 +119,21 @@ export function Header() {
   useEffect(() => () => stopPolling(), []);
 
   // ── Trigger scrape ────────────────────────────────────────────────────────
-  async function handleScrape() {
+  async function handleScrape(mode: "full" | "gartner" = "full") {
     setPhase("starting");
     try {
-      const res = await fetch("/api/scrape", { method: "POST" });
+      const res = await fetch("/api/scrape", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ mode }),
+      });
       const data = await res.json();
       if (res.ok) {
         setPhase("running");
         startPolling();
-        toast.info("Scrape started — this takes 5-15 minutes.");
+        toast.info(mode === "gartner"
+          ? "Gartner scrape started — takes ~2 minutes."
+          : "Scrape started — this takes 5-15 minutes.");
       } else {
         setPhase("idle");
         toast.error(data.error || "Failed to start scrape");
@@ -160,14 +172,39 @@ export function Header() {
         </h2>
       </div>
       <div className="flex items-center gap-3">
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={handleScrape}
-          disabled={isDisabled}
-        >
-          {buttonContent()}
-        </Button>
+        <div className="flex items-center">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => handleScrape("full")}
+            disabled={isDisabled}
+            className="rounded-r-none border-r-0"
+          >
+            {buttonContent()}
+          </Button>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={isDisabled}
+                className="rounded-l-none px-2"
+              >
+                <ChevronDown className="h-3.5 w-3.5" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuItem onClick={() => handleScrape("full")}>
+                <Play className="mr-2 h-4 w-4" />
+                Full scrape (LinkedIn + Gartner)
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => handleScrape("gartner")}>
+                <Star className="mr-2 h-4 w-4" />
+                Gartner only (free)
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </div>
         <Button
           variant="ghost"
           size="icon"

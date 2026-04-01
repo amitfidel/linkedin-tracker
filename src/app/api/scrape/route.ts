@@ -1,10 +1,10 @@
 export const dynamic = "force-dynamic";
-import { NextResponse } from "next/server";
-import { runPipeline } from "@/lib/pipeline/orchestrator";
+import { NextRequest, NextResponse } from "next/server";
+import { runPipeline, runGartnerOnly } from "@/lib/pipeline/orchestrator";
 
 let isRunning = false;
 
-export async function POST() {
+export async function POST(req: NextRequest) {
   if (isRunning) {
     return NextResponse.json(
       { error: "A scrape is already in progress" },
@@ -12,10 +12,14 @@ export async function POST() {
     );
   }
 
+  const body = await req.json().catch(() => ({}));
+  const gartnerOnly = body?.mode === "gartner";
+
   isRunning = true;
 
-  // Start pipeline in background, don't await
-  runPipeline("manual")
+  const runner = gartnerOnly ? runGartnerOnly : () => runPipeline("manual");
+
+  runner()
     .then((result) => {
       console.log("Scrape completed:", result);
     })
@@ -26,5 +30,5 @@ export async function POST() {
       isRunning = false;
     });
 
-  return NextResponse.json({ message: "Scrape started", status: "running" });
+  return NextResponse.json({ message: "Scrape started", status: "running", mode: gartnerOnly ? "gartner" : "full" });
 }
