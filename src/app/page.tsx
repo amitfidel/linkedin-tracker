@@ -34,6 +34,8 @@ interface CompanyCard {
   postCount: number;
   categoryCounts: Record<string, number>;
   posts: Post[];
+  gartnerUrl: string | null;
+  gartnerInsights: { likes: string[]; dislikes: string[] } | null;
 }
 
 interface DigestData {
@@ -213,6 +215,33 @@ function CompanyIntelCard({ company }: { company: CompanyCard }) {
           </div>
         )}
       </div>
+
+      {/* Gartner Insights */}
+      {company.gartnerInsights && (company.gartnerInsights.likes.length > 0 || company.gartnerInsights.dislikes.length > 0) && (
+        <div className="px-4 pb-3 border-t pt-3 space-y-2">
+          <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Gartner Peer Insights</p>
+          {company.gartnerInsights.likes.length > 0 && (
+            <div className="space-y-1">
+              <p className="text-xs font-medium text-green-600 dark:text-green-400">👍 Likes</p>
+              {company.gartnerInsights.likes.map((text, i) => (
+                <p key={i} className="text-xs text-muted-foreground line-clamp-2 pl-2 border-l-2 border-green-500/30">
+                  {text.length > 150 ? text.slice(0, 150) + "…" : text}
+                </p>
+              ))}
+            </div>
+          )}
+          {company.gartnerInsights.dislikes.length > 0 && (
+            <div className="space-y-1">
+              <p className="text-xs font-medium text-red-600 dark:text-red-400">👎 Dislikes</p>
+              {company.gartnerInsights.dislikes.map((text, i) => (
+                <p key={i} className="text-xs text-muted-foreground line-clamp-2 pl-2 border-l-2 border-red-500/30">
+                  {text.length > 150 ? text.slice(0, 150) + "…" : text}
+                </p>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Footer */}
       {company.postCount > 5 && (

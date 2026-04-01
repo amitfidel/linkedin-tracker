@@ -5,6 +5,7 @@ import {
   jobListings,
   companySnapshots,
   scrapeRuns,
+  gartnerInsights,
 } from "@/db/schema";
 import { eq, gte, desc, sql } from "drizzle-orm";
 import { categorizePost } from "./post-categorizer";
@@ -71,6 +72,22 @@ export async function generateWeeklyDigest() {
     }
   }
 
+  // ── Latest Gartner insights per company ───────────────────────────────────
+  const allInsights = await db
+    .select()
+    .from(gartnerInsights)
+    .orderBy(desc(gartnerInsights.scrapedAt));
+
+  const insightsMap = new Map<number, { likes: string[]; dislikes: string[] }>();
+  for (const insight of allInsights) {
+    if (!insightsMap.has(insight.companyId)) {
+      insightsMap.set(insight.companyId, { likes: [], dislikes: [] });
+    }
+    const entry = insightsMap.get(insight.companyId)!;
+    if (insight.type === "like" && entry.likes.length < 3) entry.likes.push(insight.text);
+    if (insight.type === "dislike" && entry.dislikes.length < 3) entry.dislikes.push(insight.text);
+  }
+
   // ── Build per-company cards ────────────────────────────────────────────────
   const companyCards = activeCompanies.map((company) => {
     const posts = recentPosts
@@ -111,6 +128,8 @@ export async function generateWeeklyDigest() {
       categoryCounts,
       // Top 5 posts to show in the card (prefer interesting categories)
       posts: posts.slice(0, 5),
+      gartnerUrl: company.gartnerUrl,
+      gartnerInsights: insightsMap.get(company.id) ?? null,
     };
   });
 

@@ -8,6 +8,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Badge } from "@/components/ui/badge";
+import { ExternalLink } from "lucide-react";
 import {
   Select,
   SelectContent,
@@ -32,6 +33,12 @@ interface ScheduleData {
   isEnabled: boolean;
   lastRunAt: string | null;
   nextRunAt: string | null;
+}
+
+interface Company {
+  id: number;
+  name: string;
+  gartnerUrl: string | null;
 }
 
 interface ScrapeRun {
@@ -59,6 +66,10 @@ export default function SettingsPage() {
     useFetch<ScheduleData>("/api/schedule");
   const { data: runs, loading: runsLoading } =
     useFetch<ScrapeRun[]>("/api/scrape/status");
+  const { data: companiesData } = useFetch<Company[]>("/api/companies");
+
+  const [gartnerUrls, setGartnerUrls] = useState<Record<number, string>>({});
+  const [savingGartner, setSavingGartner] = useState<number | null>(null);
 
   const [cronExpression, setCronExpression] = useState("");
   const [isEnabled, setIsEnabled] = useState(true);
@@ -92,6 +103,27 @@ export default function SettingsPage() {
       toast.error("Failed to save");
     } finally {
       setSaving(false);
+    }
+  }
+
+  function getGartnerUrl(company: Company) {
+    return gartnerUrls[company.id] ?? (company.gartnerUrl || "");
+  }
+
+  async function saveGartnerUrl(company: Company) {
+    setSavingGartner(company.id);
+    try {
+      const res = await fetch(`/api/companies/${company.id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ gartnerUrl: getGartnerUrl(company) || null }),
+      });
+      if (res.ok) toast.success(`Gartner URL saved for ${company.name}`);
+      else toast.error("Failed to save");
+    } catch {
+      toast.error("Failed to save");
+    } finally {
+      setSavingGartner(null);
     }
   }
 
@@ -188,6 +220,15 @@ export default function SettingsPage() {
             </Badge>
           </div>
 
+          <div className="border-t pt-3 space-y-2">
+            <Label>Gartner Credentials</Label>
+            <p className="text-xs text-muted-foreground">
+              Set <code className="bg-muted px-1 rounded">GARTNER_EMAIL</code> and{" "}
+              <code className="bg-muted px-1 rounded">GARTNER_PASSWORD</code> as Railway env vars
+            </p>
+            <Badge variant="secondary">Check Railway Variables tab</Badge>
+          </div>
+
           <div className="border-t pt-3">
             <h4 className="text-xs font-medium mb-2">Credit Usage Tips</h4>
             <ul className="text-xs text-muted-foreground space-y-1">
@@ -199,6 +240,48 @@ export default function SettingsPage() {
           </div>
         </Card>
       </div>
+
+      {/* Gartner URLs */}
+      {companiesData && companiesData.length > 0 && (
+        <Card className="p-4 space-y-4">
+          <div>
+            <h3 className="text-sm font-semibold flex items-center gap-2">
+              <ExternalLink className="h-4 w-4" />
+              Gartner Peer Insights URLs
+            </h3>
+            <p className="text-xs text-muted-foreground mt-1">
+              Paste each company&apos;s Gartner likes/dislikes URL to include it in the weekly scrape.
+            </p>
+          </div>
+          <div className="space-y-3">
+            {companiesData.map((company) => (
+              <div key={company.id} className="flex items-center gap-2">
+                <div className="w-32 text-sm font-medium truncate shrink-0">{company.name}</div>
+                <Input
+                  className="text-xs"
+                  placeholder="https://www.gartner.com/reviews/market/.../likes-dislikes"
+                  value={getGartnerUrl(company)}
+                  onChange={(e) =>
+                    setGartnerUrls((prev) => ({ ...prev, [company.id]: e.target.value }))
+                  }
+                />
+                <Button
+                  size="sm"
+                  variant="outline"
+                  disabled={savingGartner === company.id}
+                  onClick={() => saveGartnerUrl(company)}
+                >
+                  {savingGartner === company.id ? (
+                    <Loader2 className="h-3 w-3 animate-spin" />
+                  ) : (
+                    <Save className="h-3 w-3" />
+                  )}
+                </Button>
+              </div>
+            ))}
+          </div>
+        </Card>
+      )}
 
       {/* Scrape history */}
       <Card className="p-4">

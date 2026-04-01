@@ -6,6 +6,7 @@ import {
   jobListings,
   keyPersonnel,
   scrapeRuns,
+  gartnerInsights,
 } from "@/db/schema";
 import { eq, and } from "drizzle-orm";
 import {
@@ -22,6 +23,12 @@ import {
 } from "./transformers";
 import { detectPersonnelChanges } from "./diff-detector";
 import { generateAISummary } from "../analysis/ai-summarizer";
+import { scrapeGartnerInsights } from "../gartner/scraper";
+
+async function sha256(text: string): Promise<string> {
+  const crypto = await import("crypto");
+  return crypto.createHash("sha256").update(text).digest("hex");
+}
 
 export async function runPipeline(triggerType: "manual" | "scheduled") {
   // Create scrape run record
@@ -274,6 +281,46 @@ export async function runPipeline(triggerType: "manual" | "scheduled") {
       const msg = `Employees scrape: ${e instanceof Error ? e.message : String(e)}`;
       console.error(msg);
       stepErrors.push(msg);
+    }
+
+    // ── Step 5: Gartner insights ─────────────────────────────────────────────
+    const gartnerCompanies = activeCompanies.filter((c) => c.gartnerUrl);
+    if (gartnerCompanies.length > 0 && process.env.GARTNER_EMAIL) {
+      for (const company of gartnerCompanies) {
+        try {
+          const insights = await scrapeGartnerInsights(company.gartnerUrl!);
+          let newCount = 0;
+          for (const insight of insights) {
+            const hash = await sha256(insight.text);
+            const existing = await db
+              .select({ id: gartnerInsights.id })
+              .from(gartnerInsights)
+              .where(
+                and(
+                  eq(gartnerInsights.companyId, company.id),
+                  eq(gartnerInsights.textHash, hash)
+                )
+              )
+              .get();
+            if (!existing) {
+              await db.insert(gartnerInsights).values({
+                companyId: company.id,
+                scrapeRunId: runId,
+                type: insight.type,
+                text: insight.text,
+                textHash: hash,
+                scrapedAt: new Date().toISOString(),
+              });
+              newCount++;
+            }
+          }
+          console.log(`[Gartner] ${company.name}: ${insights.length} total, ${newCount} new`);
+        } catch (e) {
+          const msg = `Gartner scrape (${company.name}): ${e instanceof Error ? e.message : String(e)}`;
+          console.error(msg);
+          stepErrors.push(msg);
+        }
+      }
     }
 
     // ── Finalize ─────────────────────────────────────────────────────────────

@@ -14,6 +14,7 @@ export const companies = sqliteTable("companies", {
   headquarters: text("headquarters"),
   logoUrl: text("logo_url"),
   isActive: integer("is_active", { mode: "boolean" }).default(true),
+  gartnerUrl: text("gartner_url"),
   createdAt: text("created_at").default(sql`CURRENT_TIMESTAMP`),
   updatedAt: text("updated_at").default(sql`CURRENT_TIMESTAMP`),
 });
@@ -140,6 +141,27 @@ export const scheduleConfig = sqliteTable("schedule_config", {
   nextRunAt: text("next_run_at"),
 });
 
+export const gartnerInsights = sqliteTable(
+  "gartner_insights",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    companyId: integer("company_id")
+      .notNull()
+      .references(() => companies.id, { onDelete: "cascade" }),
+    scrapeRunId: integer("scrape_run_id").references(() => scrapeRuns.id),
+    type: text("type").notNull(), // 'like' or 'dislike'
+    text: text("text").notNull(),
+    textHash: text("text_hash").notNull(), // SHA-256 for dedup
+    reviewerRole: text("reviewer_role"),
+    reviewerIndustry: text("reviewer_industry"),
+    scrapedAt: text("scraped_at").default(sql`CURRENT_TIMESTAMP`),
+  },
+  (table) => [
+    index("idx_gartner_company").on(table.companyId, table.type),
+    index("idx_gartner_dedup").on(table.companyId, table.textHash),
+  ]
+);
+
 // Type exports
 export type Company = typeof companies.$inferSelect;
 export type NewCompany = typeof companies.$inferInsert;
@@ -149,3 +171,5 @@ export type KeyPerson = typeof keyPersonnel.$inferSelect;
 export type PersonnelChange = typeof personnelChanges.$inferSelect;
 export type ScrapeRun = typeof scrapeRuns.$inferSelect;
 export type ScheduleConfig = typeof scheduleConfig.$inferSelect;
+export type GartnerInsight = typeof gartnerInsights.$inferSelect;
+export type NewGartnerInsight = typeof gartnerInsights.$inferInsert;

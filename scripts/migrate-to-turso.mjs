@@ -60,6 +60,9 @@ for (const idx of indexes) {
 }
 
 // ── Copy data row by row ──────────────────────────────────────────────────────
+// Disable FK enforcement so we can insert in any order
+await turso.execute("PRAGMA foreign_keys = OFF");
+
 let totalRows = 0;
 
 for (const table of tables) {
@@ -84,4 +87,5 @@ for (const table of tables) {
   totalRows += rows.length;
 }
 
+await turso.execute("PRAGMA foreign_keys = ON");
 console.log(`\n🎉  Migration complete! ${totalRows} total rows copied to Turso.\n`);
