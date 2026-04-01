@@ -96,12 +96,31 @@ export async function scrapeGartnerInsights(
   const browser = await chromium.launch({
     headless: true,
     executablePath,
-    args: ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"],
+    args: [
+      "--no-sandbox",
+      "--disable-setuid-sandbox",
+      "--disable-dev-shm-usage",
+      "--disable-blink-features=AutomationControlled",
+    ],
   });
 
   const context = await browser.newContext({
     userAgent:
       "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    extraHTTPHeaders: {
+      "Accept-Language": "en-US,en;q=0.9",
+    },
+  });
+
+  // Hide webdriver flag so bot-detection doesn't block form rendering
+  await context.addInitScript(() => {
+    Object.defineProperty(navigator, "webdriver", { get: () => undefined });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    delete (window as any).cdc_adoQpoasnfa76pfcZLmcfl_Array;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    delete (window as any).cdc_adoQpoasnfa76pfcZLmcfl_Promise;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    delete (window as any).cdc_adoQpoasnfa76pfcZLmcfl_Symbol;
   });
 
   const page = await context.newPage();
