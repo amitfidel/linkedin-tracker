@@ -8,7 +8,7 @@ export interface GartnerInsight {
   reviewerIndustry?: string;
 }
 
-const GARTNER_LOGIN_URL = "https://www.gartner.com/reviews/authenticate#login";
+const GARTNER_LOGIN_URL = "https://www.gartner.com/peer-insights/login/reviews";
 
 function getChromiumPath(): string | undefined {
   // Let Playwright use its own installed chromium (via `npx playwright install chromium`).
@@ -34,20 +34,20 @@ async function loginToGartner(page: import("playwright-core").Page): Promise<boo
     );
     await emailInput.fill(email);
 
-    // Click "Next" / "Continue" / "Sign in" — whatever advances past the email step
+    // Step 2: click "Log in with password instead" to switch to password mode
     await page.click(
-      'button[type="submit"], input[type="submit"], button:has-text("Next"), button:has-text("Continue"), button:has-text("Sign in")',
-      { timeout: 5000 }
+      'a:has-text("Log in with password instead"), button:has-text("Log in with password instead"), a:has-text("password instead")',
+      { timeout: 8000 }
     );
 
-    // Step 2: password field may appear on same page or next page
+    // Step 3: fill password (now visible after switching mode)
     const passwordInput = await page.waitForSelector(
       'input[type="password"], input[name="password"], #password',
       { timeout: 10000 }
     );
     await passwordInput.fill(password);
 
-    // Submit the password
+    // Step 4: submit
     await page.click(
       'button[type="submit"], input[type="submit"], button:has-text("Sign in"), button:has-text("Log in")',
       { timeout: 5000 }
@@ -55,7 +55,7 @@ async function loginToGartner(page: import("playwright-core").Page): Promise<boo
 
     // Wait for successful redirect away from login page
     await page.waitForURL(
-      (url) => !url.toString().includes("authenticate") && !url.toString().includes("login"),
+      (url) => !url.toString().includes("login") && !url.toString().includes("authenticate"),
       { timeout: 20000 }
     );
 
