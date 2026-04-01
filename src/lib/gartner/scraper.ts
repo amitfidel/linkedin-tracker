@@ -80,20 +80,17 @@ export async function scrapeGartnerInsights(
   const page = await context.newPage();
 
   try {
+    // Always log in first so the session is established before navigating to the target page
+    const ok = await loginToGartner(page);
+    if (!ok) {
+      console.warn("[Gartner] Login failed or credentials not set — skipping");
+      return [];
+    }
+
     // Navigate to the likes/dislikes page
     await page.goto(gartnerUrl, { waitUntil: "domcontentloaded", timeout: 30000 });
 
-    // Login if redirected
-    if (page.url().includes("authenticate") || page.url().includes("login")) {
-      const ok = await loginToGartner(page);
-      if (!ok) {
-        console.warn("[Gartner] Login failed or credentials not set — skipping");
-        return [];
-      }
-      await page.goto(gartnerUrl, { waitUntil: "domcontentloaded", timeout: 30000 });
-    }
-
-    await page.waitForSelector(".review", { timeout: 15000 });
+    await page.waitForSelector(".review", { timeout: 20000 });
 
     // Collect top 3 likes and top 3 dislikes (in page order — most recent first)
     const cards = await page.$$(".review");
