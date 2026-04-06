@@ -22,15 +22,20 @@ interface VendorSnippets {
 }
 
 /**
- * Scrape Gartner Peer Insights likes/dislikes by fetching the HTML directly
- * and parsing the __NEXT_DATA__ JSON embedded in the page — no browser needed.
+ * Scrape Gartner Peer Insights likes/dislikes.
  *
- * The likes/dislikes page is publicly accessible (isLoggedIn: false confirmed).
- * Gartner embeds all review data server-side in __NEXT_DATA__ before the page loads.
+ * Strategy:
+ *   Step 1 – Fetch the HTML page via ScraperAPI (bypasses Cloudflare).
+ *            Extract the Next.js buildId from script src attributes.
+ *   Step 2 – Fetch the /_next/data/<buildId>/…likes-dislikes.json endpoint
+ *            via ScraperAPI. This is the lightweight JSON route Next.js uses
+ *            for client-side navigation; it returns the same serverSideXHRData
+ *            as __NEXT_DATA__ but without requiring a full HTML render.
+ *            Gartner serves this endpoint publicly — no login cookie needed.
  *
- * Data source: serverSideXHRData['vendor-snippets']
- *   - favorable: top positive reviews → we extract their likes
- *   - critical:  top critical reviews → we extract their dislikes
+ * Data source: pageProps.serverSideXHRData['vendor-snippets']
+ *   - favorable: top positive reviews → likes
+ *   - critical:  top critical reviews → dislikes
  *
  * reviewId is used as the stable dedup key.
  */
@@ -41,21 +46,23 @@ export async function scrapeGartnerInsights(
 ): Promise<GartnerInsight[]> {
   console.log("[Gartner] Fetching:", gartnerUrl);
 
-  // Cloudflare blocks Railway datacenter IPs directly.
-  // Route through ScraperAPI (free tier: 1000 calls/month — we use ~8/month).
-  // Get a free key at https://www.scraperapi.com/
   const scraperApiKey = process.env.SCRAPER_API_KEY;
-  const fetchUrl = scraperApiKey
-    ? `http://api.scraperapi.com?api_key=${scraperApiKey}&url=${encodeURIComponent(gartnerUrl)}&render=false`
-    : gartnerUrl; // fallback for local dev (no Cloudflare block locally)
+
+  const makeUrl = (target: string) =>
+    scraperApiKey
+      ? `http://api.scraperapi.com?api_key=${scraperApiKey}&url=${encodeURIComponent(target)}&render=false`
+      : target;
 
   if (!scraperApiKey) {
-    console.warn("[Gartner] SCRAPER_API_KEY not set — direct fetch may get 403 from Cloudflare");
+    console.warn("[Gartner] SCRAPER_API_KEY not set — direct fetch may fail on Railway (Cloudflare blocks)");
   }
 
-  let html: string;
+  // ── Step 1: fetch the HTML page to extract the Next.js buildId ─────────────
+  let buildId: string | null = null;
+  let snippetsFromHtml: VendorSnippets | null = null;
+
   try {
-    const res = await fetch(fetchUrl, {
+    const res = await fetch(makeUrl(gartnerUrl), {
       headers: {
         "User-Agent":
           "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -66,45 +73,117 @@ export async function scrapeGartnerInsights(
     });
 
     if (!res.ok) {
-      console.warn(`[Gartner] HTTP ${res.status} for ${gartnerUrl}`);
+      console.warn(`[Gartner] HTML fetch HTTP ${res.status}`);
+    } else {
+      const html = await res.text();
+      console.log("[Gartner] HTML preview:", html.slice(0, 300).replace(/\s+/g, " "));
+
+      // Try __NEXT_DATA__ first (present when authenticated SSR works)
+      const nextDataMatch = html.match(
+        /<script id="__NEXT_DATA__" type="application\/json">([\s\S]*?)<\/script>/
+      );
+      if (nextDataMatch) {
+        try {
+          const nextData = JSON.parse(nextDataMatch[1]);
+          buildId = nextData?.buildId ?? null;
+          const s = nextData?.props?.pageProps?.serverSideXHRData?.["vendor-snippets"];
+          if (s?.favorable || s?.critical) {
+            snippetsFromHtml = s;
+            console.log("[Gartner] Got snippets from __NEXT_DATA__ directly");
+          }
+        } catch {
+          // ignore parse error
+        }
+      }
+
+      // Extract buildId from script src if not found in __NEXT_DATA__
+      if (!buildId) {
+        const buildIdMatch = html.match(/\/_next\/static\/([a-f0-9]{40})\//);
+        if (buildIdMatch) {
+          buildId = buildIdMatch[1];
+          console.log("[Gartner] Extracted buildId from script src:", buildId);
+        }
+      }
+    }
+  } catch (e) {
+    console.warn("[Gartner] HTML fetch failed:", e instanceof Error ? e.message : e);
+  }
+
+  // If we already got snippets from __NEXT_DATA__, use them
+  if (snippetsFromHtml) {
+    return extractInsights(snippetsFromHtml, gartnerUrl);
+  }
+
+  // ── Step 2: fetch the /_next/data JSON endpoint ─────────────────────────────
+  if (!buildId) {
+    console.warn("[Gartner] Could not determine buildId — skipping JSON endpoint");
+    return [];
+  }
+
+  // Derive the page path from the URL:
+  //   https://www.gartner.com/reviews/market/{market}/vendor/{vendor}/likes-dislikes
+  //   → /reviews/_next/data/{buildId}/market/{market}/vendor/{vendor}/likes-dislikes.json
+  const urlObj = new URL(gartnerUrl);
+  // path: /reviews/market/{marketSeoName}/vendor/{vendorSeoName}/likes-dislikes
+  const pagePath = urlObj.pathname.replace(/^\/reviews/, ""); // /market/.../likes-dislikes
+  const jsonUrl = `${urlObj.origin}/reviews/_next/data/${buildId}${pagePath}.json`;
+
+  console.log("[Gartner] Fetching JSON data endpoint:", jsonUrl);
+
+  try {
+    const res = await fetch(makeUrl(jsonUrl), {
+      headers: {
+        "User-Agent":
+          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        Accept: "application/json, */*",
+        "Accept-Language": "en-US,en;q=0.9",
+        // Mimic what Next.js sends for client-side navigation
+        "x-nextjs-data": "1",
+        Referer: gartnerUrl,
+      },
+    });
+
+    if (!res.ok) {
+      console.warn(`[Gartner] JSON endpoint HTTP ${res.status} for ${jsonUrl}`);
       return [];
     }
-    html = await res.text();
+
+    const contentType = res.headers.get("content-type") ?? "";
+    const text = await res.text();
+    console.log("[Gartner] JSON endpoint response preview:", text.slice(0, 200).replace(/\s+/g, " "));
+
+    if (!contentType.includes("json") && !text.trim().startsWith("{")) {
+      console.warn("[Gartner] JSON endpoint returned non-JSON response");
+      return [];
+    }
+
+    let data: Record<string, unknown>;
+    try {
+      data = JSON.parse(text);
+    } catch {
+      console.warn("[Gartner] Failed to parse JSON endpoint response");
+      return [];
+    }
+
+    const snippets =
+      (data as { pageProps?: { serverSideXHRData?: { "vendor-snippets"?: VendorSnippets } } })
+        ?.pageProps?.serverSideXHRData?.["vendor-snippets"];
+
+    if (!snippets?.favorable && !snippets?.critical) {
+      console.warn("[Gartner] No favorable/critical snippets in JSON response");
+      return [];
+    }
+
+    return extractInsights(snippets, gartnerUrl);
   } catch (e) {
-    console.warn("[Gartner] Fetch failed:", e instanceof Error ? e.message : e);
+    console.warn("[Gartner] JSON endpoint fetch failed:", e instanceof Error ? e.message : e);
     return [];
   }
+}
 
-  // Debug: log first 500 chars to see what page was returned
-  console.log("[Gartner] HTML preview:", html.slice(0, 500).replace(/\s+/g, " "));
-
-  // Extract the __NEXT_DATA__ JSON embedded by Next.js SSR
-  const match = html.match(
-    /<script id="__NEXT_DATA__" type="application\/json">([\s\S]*?)<\/script>/
-  );
-  if (!match) {
-    console.warn("[Gartner] __NEXT_DATA__ not found in page HTML");
-    return [];
-  }
-
-  let snippets: VendorSnippets;
-  try {
-    const nextData = JSON.parse(match[1]);
-    snippets =
-      nextData?.props?.pageProps?.serverSideXHRData?.["vendor-snippets"] ?? {};
-  } catch (e) {
-    console.warn("[Gartner] Failed to parse __NEXT_DATA__:", e instanceof Error ? e.message : e);
-    return [];
-  }
-
-  if (!snippets.favorable && !snippets.critical) {
-    console.warn("[Gartner] No favorable/critical snippets found in page data");
-    return [];
-  }
-
+function extractInsights(snippets: VendorSnippets, gartnerUrl: string): GartnerInsight[] {
   const results: GartnerInsight[] = [];
 
-  // Top 3 likes from the most favorable (high-rated) reviews
   for (const review of (snippets.favorable ?? []).slice(0, 3)) {
     const text = review.answers?.["lessonslearned-like-most"]?.trim();
     if (text) {
@@ -118,7 +197,6 @@ export async function scrapeGartnerInsights(
     }
   }
 
-  // Top 3 dislikes from the most critical (low-rated) reviews
   for (const review of (snippets.critical ?? []).slice(0, 3)) {
     const text = review.answers?.["lessonslearned-dislike-most"]?.trim();
     if (text) {
@@ -134,8 +212,7 @@ export async function scrapeGartnerInsights(
 
   console.log(
     `[Gartner] Extracted ${results.filter((r) => r.type === "like").length} likes, ` +
-    `${results.filter((r) => r.type === "dislike").length} dislikes from ${gartnerUrl}`
+      `${results.filter((r) => r.type === "dislike").length} dislikes`
   );
-
   return results;
 }
