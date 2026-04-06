@@ -75,6 +75,9 @@ export async function scrapeGartnerInsights(
     return [];
   }
 
+  // Debug: log first 500 chars to see what page was returned
+  console.log("[Gartner] HTML preview:", html.slice(0, 500).replace(/\s+/g, " "));
+
   // Extract the __NEXT_DATA__ JSON embedded by Next.js SSR
   const match = html.match(
     /<script id="__NEXT_DATA__" type="application\/json">([\s\S]*?)<\/script>/
