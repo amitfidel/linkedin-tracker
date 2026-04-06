@@ -35,6 +35,7 @@ export default function CompaniesPage() {
   const [name, setName] = useState("");
   const [linkedinUrl, setLinkedinUrl] = useState("");
   const [industry, setIndustry] = useState("");
+  const [gartnerUrl, setGartnerUrl] = useState("");
   const [adding, setAdding] = useState(false);
 
   async function handleAdd() {
@@ -47,13 +48,14 @@ export default function CompaniesPage() {
       const res = await fetch("/api/companies", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name, linkedinUrl, industry: industry || null }),
+        body: JSON.stringify({ name, linkedinUrl, industry: industry || null, gartnerUrl: gartnerUrl || null }),
       });
       if (res.ok) {
         toast.success(`${name} added`);
         setName("");
         setLinkedinUrl("");
         setIndustry("");
+        setGartnerUrl("");
         setIsOpen(false);
         refetch();
       } else {
@@ -130,6 +132,17 @@ export default function CompaniesPage() {
                   value={industry}
                   onChange={(e) => setIndustry(e.target.value)}
                 />
+              </div>
+              <div>
+                <Label>Gartner Peer Insights URL (optional)</Label>
+                <Input
+                  placeholder="https://www.gartner.com/reviews/market/.../vendor/.../likes-dislikes"
+                  value={gartnerUrl}
+                  onChange={(e) => setGartnerUrl(e.target.value)}
+                />
+                <p className="text-xs text-muted-foreground mt-1">
+                  Leave blank — will be auto-discovered on next scrape.
+                </p>
               </div>
               <Button onClick={handleAdd} disabled={adding} className="w-full">
                 {adding ? (

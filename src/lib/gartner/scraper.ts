@@ -1,3 +1,67 @@
+/**
+ * Try to auto-discover a company's Gartner Peer Insights likes-dislikes URL.
+ * Uses ScraperAPI to search Gartner and extract the vendor page URL.
+ * Returns null if not found or if ScraperAPI is unavailable.
+ */
+export async function discoverGartnerUrl(companyName: string): Promise<string | null> {
+  const scraperApiKey = process.env.SCRAPER_API_KEY;
+  if (!scraperApiKey) {
+    console.log("[Gartner:discover] SCRAPER_API_KEY not set — skipping auto-discovery");
+    return null;
+  }
+
+  const searchUrl = `https://www.gartner.com/reviews/search?q=${encodeURIComponent(companyName)}`;
+  const proxied = `http://api.scraperapi.com?api_key=${scraperApiKey}&url=${encodeURIComponent(searchUrl)}&render=true`;
+
+  console.log(`[Gartner:discover] Searching Gartner for: ${companyName}`);
+
+  try {
+    const res = await fetch(proxied, {
+      headers: {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.9",
+      },
+      signal: AbortSignal.timeout(30_000),
+    });
+
+    if (!res.ok) {
+      console.warn(`[Gartner:discover] Search page returned HTTP ${res.status}`);
+      return null;
+    }
+
+    const html = await res.text();
+
+    // Look for vendor review page links — pattern: /reviews/market/{market}/vendor/{vendor}
+    // We want the most specific match that includes the company name slug
+    const vendorPattern = /href="(\/reviews\/market\/[a-z0-9-]+\/vendor\/[a-z0-9-]+)(?:\/[^"]*)?"/gi;
+    const nameSlug = companyName.toLowerCase().replace(/[^a-z0-9]/g, "-").replace(/-+/g, "-");
+    const matches: string[] = [];
+
+    let m;
+    while ((m = vendorPattern.exec(html)) !== null) {
+      const path = m[1];
+      // Deduplicate
+      if (!matches.includes(path)) matches.push(path);
+    }
+
+    if (matches.length === 0) {
+      console.log(`[Gartner:discover] No vendor URLs found for ${companyName}`);
+      return null;
+    }
+
+    // Prefer a match where the vendor slug contains the company name
+    const preferred = matches.find((p) => p.toLowerCase().includes(nameSlug)) ?? matches[0];
+    const gartnerUrl = `https://www.gartner.com${preferred}/likes-dislikes`;
+
+    console.log(`[Gartner:discover] Found Gartner URL for ${companyName}: ${gartnerUrl}`);
+    return gartnerUrl;
+  } catch (e) {
+    console.warn("[Gartner:discover] Failed:", e instanceof Error ? e.message : e);
+    return null;
+  }
+}
+
 export interface GartnerInsight {
   type: "like" | "dislike";
   text: string;

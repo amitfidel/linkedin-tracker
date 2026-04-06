@@ -39,6 +39,13 @@ export async function POST(request: Request) {
     );
   }
 
+  // Normalize Gartner URL if provided
+  let gartnerUrl: string | null = null;
+  if (body.gartnerUrl?.trim()) {
+    gartnerUrl = body.gartnerUrl.trim().replace(/\/$/, "");
+    if (!gartnerUrl.startsWith("http")) gartnerUrl = `https://${gartnerUrl}`;
+  }
+
   const [newCompany] = await db
     .insert(companies)
     .values({
@@ -46,6 +53,7 @@ export async function POST(request: Request) {
       linkedinUrl: url,
       industry: body.industry || null,
       website: body.website || null,
+      gartnerUrl,
     })
     .returning();
 

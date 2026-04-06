@@ -23,7 +23,7 @@ import {
 } from "./transformers";
 import { detectPersonnelChanges } from "./diff-detector";
 import { generateAISummary } from "../analysis/ai-summarizer";
-import { scrapeGartnerInsights } from "../gartner/scraper";
+import { scrapeGartnerInsights, discoverGartnerUrl } from "../gartner/scraper";
 
 async function sha256(text: string): Promise<string> {
   const crypto = await import("crypto");
@@ -281,6 +281,26 @@ export async function runPipeline(triggerType: "manual" | "scheduled") {
       const msg = `Employees scrape: ${e instanceof Error ? e.message : String(e)}`;
       console.error(msg);
       stepErrors.push(msg);
+    }
+
+    // ── Step 4b: Auto-discover Gartner URLs for companies that don't have one ──
+    for (const company of activeCompanies) {
+      if (!company.gartnerUrl) {
+        try {
+          const discovered = await discoverGartnerUrl(company.name);
+          if (discovered) {
+            await db
+              .update(companies)
+              .set({ gartnerUrl: discovered, updatedAt: new Date().toISOString() })
+              .where(eq(companies.id, company.id));
+            // Update in-memory so Step 5 picks it up immediately
+            company.gartnerUrl = discovered;
+            console.log(`[Gartner] Auto-discovered URL for ${company.name}: ${discovered}`);
+          }
+        } catch (e) {
+          console.warn(`[Gartner] Auto-discovery failed for ${company.name}:`, e instanceof Error ? e.message : e);
+        }
+      }
     }
 
     // ── Step 5: Gartner insights ─────────────────────────────────────────────
