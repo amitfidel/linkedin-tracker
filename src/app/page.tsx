@@ -86,18 +86,18 @@ function CategoryBadge({ category }: { category: PostCategory }) {
 }
 
 function PostItem({ post }: { post: Post }) {
-  const snippet = post.content?.replace(/\s+/g, " ").trim().slice(0, 200);
-  const isLong = (post.content?.length ?? 0) > 200;
+  const snippet = post.content?.replace(/\s+/g, " ").trim().slice(0, 160);
+  const isLong = (post.content?.length ?? 0) > 160;
 
   return (
-    <div className="space-y-1.5 py-3 border-b last:border-0">
+    <div className="py-3 border-b last:border-0 space-y-1.5">
       <div className="flex items-center gap-2">
         <CategoryBadge category={post.category} />
         <span className="text-xs text-muted-foreground ml-auto shrink-0">
           {timeSince(post.postedAt)}
         </span>
       </div>
-      <p className="text-sm leading-relaxed text-foreground/90">
+      <p className="text-sm leading-snug text-foreground/85 line-clamp-3">
         {snippet}{isLong ? "…" : ""}
       </p>
       <div className="flex items-center gap-3 text-xs text-muted-foreground">
@@ -124,30 +124,37 @@ function CompanyIntelCard({ company }: { company: CompanyCard }) {
     .sort((a, b) => b[1] - a[1]);
 
   const hasActivity = company.postCount > 0;
+  const visiblePosts = company.posts.slice(0, 3);
+  const extraPosts = company.postCount - visiblePosts.length;
+
+  const likes = company.gartnerInsights?.likes ?? [];
+  const dislikes = company.gartnerInsights?.dislikes ?? [];
+  const hasGartner = likes.length > 0 || dislikes.length > 0;
+  const totalInsights = likes.length + dislikes.length;
 
   return (
     <Card className="flex flex-col overflow-hidden">
-      {/* Header */}
-      <div className="flex items-start justify-between gap-3 p-4 pb-3 border-b">
-        <div className="flex items-start gap-3 min-w-0">
+      {/* ── Header ──────────────────────────────────────────────────────────── */}
+      <div className="flex items-center justify-between gap-4 p-5 pb-4 border-b">
+        <div className="flex items-center gap-3 min-w-0">
           {company.logoUrl ? (
             <img
               src={company.logoUrl}
               alt={company.name}
-              className="h-10 w-10 rounded-lg object-contain shrink-0 bg-muted"
+              className="h-11 w-11 rounded-xl object-contain shrink-0 bg-muted p-0.5"
             />
           ) : (
-            <div className="h-10 w-10 rounded-lg bg-muted flex items-center justify-center shrink-0">
+            <div className="h-11 w-11 rounded-xl bg-muted flex items-center justify-center shrink-0">
               <span className="text-lg font-bold text-muted-foreground">
                 {company.name[0].toUpperCase()}
               </span>
             </div>
           )}
           <div className="min-w-0">
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-1.5">
               <Link
                 href={`/companies/${company.id}`}
-                className="font-semibold hover:underline truncate"
+                className="font-semibold text-base hover:underline truncate"
               >
                 {company.name}
               </Link>
@@ -161,12 +168,12 @@ function CompanyIntelCard({ company }: { company: CompanyCard }) {
               </a>
             </div>
             {company.industry && (
-              <p className="text-xs text-muted-foreground truncate">{company.industry}</p>
+              <p className="text-xs text-muted-foreground truncate mt-0.5">{company.industry}</p>
             )}
           </div>
         </div>
-        {/* Stats pill */}
-        <div className="flex items-center gap-3 text-xs text-muted-foreground shrink-0">
+        {/* Stats */}
+        <div className="flex flex-col items-end gap-1 text-xs text-muted-foreground shrink-0">
           {company.followerCount != null && (
             <span className="flex items-center gap-1">
               <Users className="h-3 w-3" />
@@ -185,14 +192,14 @@ function CompanyIntelCard({ company }: { company: CompanyCard }) {
         </div>
       </div>
 
-      {/* Category highlights */}
+      {/* ── Category badges ──────────────────────────────────────────────────── */}
       {interestingCategories.length > 0 && (
-        <div className="flex flex-wrap gap-1.5 px-4 py-2 bg-muted/30 border-b">
-          <span className="text-xs text-muted-foreground">This week:</span>
+        <div className="flex flex-wrap gap-1.5 px-5 py-2.5 bg-muted/20 border-b">
+          <span className="text-xs text-muted-foreground mr-0.5">This week:</span>
           {interestingCategories.map(([cat, count]) => (
             <span
               key={cat}
-              className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium ${CATEGORY_META[cat as PostCategory]?.color ?? ""}`}
+              className={`inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-xs font-medium ${CATEGORY_META[cat as PostCategory]?.color ?? ""}`}
             >
               {CATEGORY_META[cat as PostCategory]?.emoji} {count}× {CATEGORY_META[cat as PostCategory]?.label}
             </span>
@@ -200,58 +207,68 @@ function CompanyIntelCard({ company }: { company: CompanyCard }) {
         </div>
       )}
 
-      {/* Posts */}
-      <div className="flex-1 px-4 overflow-hidden">
+      {/* ── Posts ────────────────────────────────────────────────────────────── */}
+      <div className="flex-1 px-5">
         {hasActivity ? (
           <div>
-            {company.posts.map((post) => (
+            {visiblePosts.map((post) => (
               <PostItem key={post.id} post={post} />
             ))}
+            {extraPosts > 0 && (
+              <div className="py-2.5">
+                <Link
+                  href={`/companies/${company.id}`}
+                  className="text-xs text-blue-500 hover:underline"
+                >
+                  +{extraPosts} more posts →
+                </Link>
+              </div>
+            )}
           </div>
         ) : (
-          <div className="py-8 text-center text-sm text-muted-foreground">
+          <div className="py-10 text-center text-sm text-muted-foreground">
             <Rss className="h-6 w-6 mx-auto mb-2 opacity-30" />
             No posts scraped yet
           </div>
         )}
       </div>
 
-      {/* Gartner Insights */}
-      {company.gartnerInsights && (company.gartnerInsights.likes.length > 0 || company.gartnerInsights.dislikes.length > 0) && (
-        <div className="px-4 pb-3 border-t pt-3 space-y-2">
-          <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Gartner Peer Insights</p>
-          {company.gartnerInsights.likes.length > 0 && (
-            <div className="space-y-1">
-              <p className="text-xs font-medium text-green-600 dark:text-green-400">👍 Likes</p>
-              {company.gartnerInsights.likes.map((text, i) => (
-                <p key={i} className="text-xs text-muted-foreground line-clamp-2 pl-2 border-l-2 border-green-500/30">
-                  {text.length > 150 ? text.slice(0, 150) + "…" : text}
+      {/* ── Gartner Peer Insights (compact: 1 like + 1 dislike) ─────────────── */}
+      {hasGartner && (
+        <div className="px-5 pb-4 pt-3 border-t space-y-2.5">
+          <div className="flex items-center justify-between">
+            <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
+              Gartner Peer Insights
+            </p>
+            {company.gartnerUrl && totalInsights > 2 && (
+              <a
+                href={company.gartnerUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-xs text-blue-500 hover:underline flex items-center gap-0.5"
+              >
+                {totalInsights - 2} more <ExternalLink className="h-2.5 w-2.5" />
+              </a>
+            )}
+          </div>
+          <div className="space-y-2">
+            {likes[0] && (
+              <div className="flex gap-2">
+                <span className="text-green-500 text-xs shrink-0 mt-0.5">👍</span>
+                <p className="text-xs text-muted-foreground line-clamp-2 leading-relaxed">
+                  {likes[0].length > 140 ? likes[0].slice(0, 140) + "…" : likes[0]}
                 </p>
-              ))}
-            </div>
-          )}
-          {company.gartnerInsights.dislikes.length > 0 && (
-            <div className="space-y-1">
-              <p className="text-xs font-medium text-red-600 dark:text-red-400">👎 Dislikes</p>
-              {company.gartnerInsights.dislikes.map((text, i) => (
-                <p key={i} className="text-xs text-muted-foreground line-clamp-2 pl-2 border-l-2 border-red-500/30">
-                  {text.length > 150 ? text.slice(0, 150) + "…" : text}
+              </div>
+            )}
+            {dislikes[0] && (
+              <div className="flex gap-2">
+                <span className="text-amber-500 text-xs shrink-0 mt-0.5">👎</span>
+                <p className="text-xs text-muted-foreground line-clamp-2 leading-relaxed">
+                  {dislikes[0].length > 140 ? dislikes[0].slice(0, 140) + "…" : dislikes[0]}
                 </p>
-              ))}
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* Footer */}
-      {company.postCount > 5 && (
-        <div className="px-4 py-2 border-t">
-          <Link
-            href={`/companies/${company.id}`}
-            className="text-xs text-blue-500 hover:underline"
-          >
-            View all {company.postCount} posts →
-          </Link>
+              </div>
+            )}
+          </div>
         </div>
       )}
     </Card>
@@ -335,7 +352,7 @@ export default function DashboardPage() {
           </p>
         </Card>
       ) : (
-        <div className="grid gap-6 lg:grid-cols-2 xl:grid-cols-2 2xl:grid-cols-3">
+        <div className="grid gap-6 lg:grid-cols-2">
           {digest.companyCards.map((company) => (
             <CompanyIntelCard key={company.id} company={company} />
           ))}
