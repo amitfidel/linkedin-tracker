@@ -41,9 +41,10 @@ export async function POST(request: Request) {
 
   // Normalize Gartner URL if provided
   let gartnerUrl: string | null = null;
-  if (body.gartnerUrl?.trim()) {
-    gartnerUrl = body.gartnerUrl.trim().replace(/\/$/, "");
-    if (!gartnerUrl.startsWith("http")) gartnerUrl = `https://${gartnerUrl}`;
+  const rawGartner = body.gartnerUrl?.trim() as string | undefined;
+  if (rawGartner) {
+    const cleaned = rawGartner.replace(/\/$/, "");
+    gartnerUrl = cleaned.startsWith("http") ? cleaned : `https://${cleaned}`;
   }
 
   const [newCompany] = await db
