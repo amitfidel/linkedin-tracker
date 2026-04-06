@@ -41,16 +41,27 @@ export async function scrapeGartnerInsights(
 ): Promise<GartnerInsight[]> {
   console.log("[Gartner] Fetching:", gartnerUrl);
 
+  // Cloudflare blocks Railway datacenter IPs directly.
+  // Route through ScraperAPI (free tier: 1000 calls/month — we use ~8/month).
+  // Get a free key at https://www.scraperapi.com/
+  const scraperApiKey = process.env.SCRAPER_API_KEY;
+  const fetchUrl = scraperApiKey
+    ? `http://api.scraperapi.com?api_key=${scraperApiKey}&url=${encodeURIComponent(gartnerUrl)}&render=false`
+    : gartnerUrl; // fallback for local dev (no Cloudflare block locally)
+
+  if (!scraperApiKey) {
+    console.warn("[Gartner] SCRAPER_API_KEY not set — direct fetch may get 403 from Cloudflare");
+  }
+
   let html: string;
   try {
-    const res = await fetch(gartnerUrl, {
+    const res = await fetch(fetchUrl, {
       headers: {
         "User-Agent":
           "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
         Accept:
           "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
         "Accept-Language": "en-US,en;q=0.9",
-        "Cache-Control": "no-cache",
       },
     });
 
