@@ -50,8 +50,13 @@ async function loginToGartner(page: import("playwright-core").Page): Promise<boo
   } catch (e) {
     console.warn("[Gartner] Login failed:", e instanceof Error ? e.message : e);
     console.warn("[Gartner] Current URL at failure:", page.url());
-    // Take a screenshot of what we see for debugging
     try {
+      const title = await page.title();
+      console.warn("[Gartner] Page title:", title);
+      const bodyText = await page.$eval("body", (el) =>
+        (el as HTMLElement).innerText?.replace(/\s+/g, " ").slice(0, 500)
+      ).catch(() => "N/A");
+      console.warn("[Gartner] Page body text:", bodyText);
       const html = await page.content();
       const inputTags = html.match(/<input[^>]*>/gi)?.slice(0, 5).join("\n") ?? "no inputs found";
       console.warn("[Gartner] Input tags found:", inputTags);
