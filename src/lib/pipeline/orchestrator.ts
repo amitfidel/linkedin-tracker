@@ -285,7 +285,7 @@ export async function runPipeline(triggerType: "manual" | "scheduled") {
 
     // ── Step 5: Gartner insights ─────────────────────────────────────────────
     const gartnerCompanies = activeCompanies.filter((c) => c.gartnerUrl);
-    if (gartnerCompanies.length > 0 && process.env.GARTNER_EMAIL) {
+    if (gartnerCompanies.length > 0) {
       for (const company of gartnerCompanies) {
         try {
           // Fetch already-scraped review URLs so the scraper can skip them
@@ -408,12 +408,12 @@ export async function runGartnerOnly() {
     const activeCompanies = await db.select().from(companies).where(eq(companies.isActive, true));
     const gartnerCompanies = activeCompanies.filter((c) => c.gartnerUrl);
 
-    if (gartnerCompanies.length === 0 || !process.env.GARTNER_EMAIL) {
+    if (gartnerCompanies.length === 0) {
       await db.update(scrapeRuns).set({
         status: "completed",
         completedAt: new Date().toISOString(),
         companiesCount: 0,
-        stepErrors: JSON.stringify(["No companies with Gartner URL or credentials not set"]),
+        stepErrors: JSON.stringify(["No companies with Gartner URL configured"]),
       }).where(eq(scrapeRuns.id, runId));
       return { runId, status: "completed" };
     }
