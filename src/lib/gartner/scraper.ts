@@ -8,93 +8,20 @@ export interface GartnerInsight {
   reviewerIndustry?: string;
 }
 
-const GARTNER_LOGIN_URL = "https://www.gartner.com/peer-insights/login/reviews";
-
 function getChromiumPath(): string | undefined {
-  // Let Playwright use its own installed chromium (via `npx playwright install chromium`).
-  // Only override if a system binary is explicitly set via env var.
   return process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH ?? undefined;
 }
 
-async function loginToGartner(page: import("playwright-core").Page): Promise<boolean> {
-  const email = process.env.GARTNER_EMAIL;
-  const password = process.env.GARTNER_PASSWORD;
-  if (!email || !password) {
-    console.warn("[Gartner] GARTNER_EMAIL or GARTNER_PASSWORD not set");
-    return false;
-  }
-
-  await page.goto(GARTNER_LOGIN_URL, { waitUntil: "networkidle", timeout: 30000 });
-
-  try {
-    // Step 1: fill email using label-based locator (robust across frameworks)
-    await page.getByLabel("Email").fill(email);
-
-    // Step 2: click "Log in with password instead"
-    await page.getByText("Log in with password instead").click({ timeout: 8000 });
-
-    // Step 3: fill password
-    await page.getByLabel("Password").fill(password);
-
-    // Step 4: submit — click the visible submit/sign-in button
-    await page.getByRole("button", { name: /sign in|log in/i }).click({ timeout: 5000 });
-
-    // Wait for successful redirect away from login page
-    await page.waitForURL(
-      (url) => !url.toString().includes("login") && !url.toString().includes("authenticate"),
-      { timeout: 20000 }
-    );
-
-    console.log("[Gartner] Login successful, current URL:", page.url());
-    return true;
-  } catch (e) {
-    console.warn("[Gartner] Login failed:", e instanceof Error ? e.message : e);
-    console.warn("[Gartner] Current URL at failure:", page.url());
-    try {
-      const title = await page.title();
-      console.warn("[Gartner] Page title:", title);
-      const bodyText = await page.$eval("body", (el) =>
-        (el as HTMLElement).innerText?.replace(/\s+/g, " ").slice(0, 500)
-      ).catch(() => "N/A");
-      console.warn("[Gartner] Page body text:", bodyText);
-      const html = await page.content();
-      const inputTags = html.match(/<input[^>]*>/gi)?.slice(0, 5).join("\n") ?? "no inputs found";
-      console.warn("[Gartner] Input tags found:", inputTags);
-    } catch {}
-    return false;
-  }
-}
-
-/** Extract review URL + full like/dislike text from an individual review page */
-async function extractReviewInsights(
-  page: import("playwright-core").Page
-): Promise<{ likeText: string; dislikeText: string; reviewerRole: string; reviewerIndustry: string }> {
-  const answers = await page.$$eval("p.answer", (els) =>
-    els.map((el) => (el as HTMLElement).innerText?.trim() ?? "")
-  );
-
-  const reviewerText = await page.$eval(
-    "aside",
-    (el) => (el as HTMLElement).innerText ?? ""
-  ).catch(() => "");
-
-  // Parse reviewer role and industry from aside text
-  // Format: "Reviewer Profile\n{Role}\nIndustry:\n{Industry}\n..."
-  const roleMatch = reviewerText.match(/Reviewer Profile\s*\n([^\n]+)/);
-  const industryMatch = reviewerText.match(/Industry:\s*\n([^\n]+)/);
-
-  return {
-    likeText: answers[0] ?? "",
-    dislikeText: answers[1] ?? "",
-    reviewerRole: roleMatch?.[1]?.trim() ?? "",
-    reviewerIndustry: industryMatch?.[1]?.trim() ?? "",
-  };
-}
-
+/**
+ * Scrape Gartner Peer Insights likes/dislikes from a public vendor page.
+ * NO LOGIN REQUIRED — the likes/dislikes list page is publicly accessible.
+ * Expands truncated text by clicking the inline "..." expand links.
+ * Deduplication is handled upstream via textHash — this always returns the top cards.
+ */
 export async function scrapeGartnerInsights(
   gartnerUrl: string,
-  /** Review URLs already in DB — skip these to avoid re-scraping */
-  existingReviewUrls: Set<string> = new Set()
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  _existingReviewUrls: Set<string> = new Set()
 ): Promise<GartnerInsight[]> {
   const executablePath = getChromiumPath();
 
@@ -117,98 +44,96 @@ export async function scrapeGartnerInsights(
     },
   });
 
-  // Hide webdriver flag so bot-detection doesn't block form rendering
   await context.addInitScript(() => {
     Object.defineProperty(navigator, "webdriver", { get: () => undefined });
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    delete (window as any).cdc_adoQpoasnfa76pfcZLmcfl_Array;
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    delete (window as any).cdc_adoQpoasnfa76pfcZLmcfl_Promise;
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    delete (window as any).cdc_adoQpoasnfa76pfcZLmcfl_Symbol;
   });
 
   const page = await context.newPage();
 
   try {
-    // Always log in first so the session is established before navigating to the target page
-    const ok = await loginToGartner(page);
-    if (!ok) {
-      console.warn("[Gartner] Login failed or credentials not set — skipping");
+    console.log("[Gartner] Navigating to:", gartnerUrl);
+    await page.goto(gartnerUrl, { waitUntil: "domcontentloaded", timeout: 30000 });
+
+    // Wait for the review regions to appear
+    try {
+      await page.waitForSelector('[role="region"]', { timeout: 20000 });
+    } catch {
+      console.warn("[Gartner] No review regions found on page:", gartnerUrl);
       return [];
     }
 
-    // Navigate to the likes/dislikes page
-    await page.goto(gartnerUrl, { waitUntil: "domcontentloaded", timeout: 30000 });
-
-    await page.waitForSelector(".review", { timeout: 20000 });
-
-    // Collect top 3 likes and top 3 dislikes (in page order — most recent first)
-    const cards = await page.$$(".review");
-    const toScrape: Array<{ type: "like" | "dislike"; index: number }> = [];
-    let likeCount = 0, dislikeCount = 0;
-
-    for (let i = 0; i < cards.length; i++) {
-      if (likeCount >= 3 && dislikeCount >= 3) break;
-      const label = await cards[i].$eval(
-        ".dot-and-title-inner",
-        (el) => (el as HTMLElement).innerText?.trim()
-      ).catch(() => "");
-
-      if (label === "LIKES" && likeCount < 3) {
-        toScrape.push({ type: "like", index: i });
-        likeCount++;
-      } else if (label === "DISLIKES" && dislikeCount < 3) {
-        toScrape.push({ type: "dislike", index: i });
-        dislikeCount++;
-      }
+    // Expand all truncated text by clicking every "read more" inline link
+    // These are <a href="javascript:void(0)"> inside the truncation spans
+    const expandLinks = await page.$$('a[href="javascript:void(0)"]');
+    console.log(`[Gartner] Found ${expandLinks.length} expand links — clicking all`);
+    for (const link of expandLinks) {
+      await link.click().catch(() => {/* some may not be visible */});
     }
+    // Small pause for DOM updates
+    await page.waitForTimeout(500);
+
+    // Extract like/dislike text from the first 3 review region cards
+    const reviews = await page.$$eval(
+      '[role="region"]',
+      (regions: Element[]) =>
+        regions.slice(0, 3).map((region, idx) => {
+          // Helper: get text content of the first generic element after a heading
+          const getTextAfterHeading = (headingText: string): string => {
+            const headings = Array.from(region.querySelectorAll('[role="heading"]'));
+            const heading = headings.find(
+              (h) => (h.textContent ?? "").toLowerCase().includes(headingText)
+            );
+            if (!heading) return "";
+
+            // Walk siblings to find the text node element (skips date/button siblings)
+            let el = heading.nextElementSibling;
+            while (el) {
+              const tag = el.tagName.toLowerCase();
+              const role = el.getAttribute("role");
+              // Skip headings and buttons; first non-button sibling is the text
+              if (tag !== "button" && role !== "button" && role !== "heading") {
+                return (el as HTMLElement).innerText?.replace(/\s+/g, " ").trim() ?? "";
+              }
+              el = el.nextElementSibling;
+            }
+            return "";
+          };
+
+          const likeText = getTextAfterHeading("like");
+          const dislikeText = getTextAfterHeading("dislike");
+
+          return { idx, likeText, dislikeText };
+        })
+    );
+
+    console.log(`[Gartner] Extracted ${reviews.length} review pairs from ${gartnerUrl}`);
 
     const results: GartnerInsight[] = [];
 
-    for (const { type, index } of toScrape) {
-      try {
-        // Re-query cards after each navigation (page may have re-rendered)
-        await page.goto(gartnerUrl, { waitUntil: "domcontentloaded", timeout: 30000 });
-        await page.waitForSelector(".review", { timeout: 15000 });
+    for (const { idx, likeText, dislikeText } of reviews) {
+      // Synthetic URL used only as a stable identifier — textHash dedup in orchestrator
+      const syntheticUrl = `${gartnerUrl}#card-${idx}`;
 
-        const freshCards = await page.$$(".review");
-        const card = freshCards[index];
-        if (!card) continue;
-
-        // Click "Read Full Review" button
-        const btn = await card.$("button");
-        if (!btn) continue;
-
-        await Promise.all([
-          page.waitForNavigation({ waitUntil: "domcontentloaded", timeout: 20000 }),
-          btn.click(),
-        ]);
-
-        const reviewUrl = page.url();
-
-        // Skip if already scraped
-        if (existingReviewUrls.has(reviewUrl)) {
-          console.log(`[Gartner] Already scraped: ${reviewUrl}`);
-          continue;
-        }
-
-        // Wait for review content to load
-        await page.waitForSelector("p.answer", { timeout: 10000 });
-
-        const { likeText, dislikeText, reviewerRole, reviewerIndustry } =
-          await extractReviewInsights(page);
-
-        const text = type === "like" ? likeText : dislikeText;
-        if (!text) continue;
-
-        results.push({ type, text, reviewUrl, reviewerRole, reviewerIndustry });
-      } catch (e) {
-        console.warn(`[Gartner] Failed to scrape review #${index}:`, e instanceof Error ? e.message : e);
+      if (likeText) {
+        results.push({
+          type: "like",
+          text: likeText,
+          reviewUrl: syntheticUrl,
+        });
+      }
+      if (dislikeText) {
+        results.push({
+          type: "dislike",
+          text: dislikeText,
+          reviewUrl: syntheticUrl,
+        });
       }
     }
 
     return results;
+  } catch (e) {
+    console.warn("[Gartner] Scrape failed:", e instanceof Error ? e.message : e);
+    return [];
   } finally {
     await browser.close();
   }
