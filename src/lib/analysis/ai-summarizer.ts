@@ -2,6 +2,7 @@ import { db } from "@/db";
 import {
   companies,
   companyPosts,
+  gartnerInsights,
   scrapeRuns,
 } from "@/db/schema";
 import { eq, gte, desc, and } from "drizzle-orm";
@@ -24,7 +25,7 @@ async function callGemini(prompt: string): Promise<string> {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       contents: [{ parts: [{ text: prompt }] }],
-      generationConfig: { maxOutputTokens: 800, temperature: 0.3 },
+      generationConfig: { maxOutputTokens: 1200, temperature: 0.3 },
     }),
   });
 
@@ -71,9 +72,48 @@ async function collectInterestingPosts(sinceDays = 7): Promise<PostForSummary[]>
     .filter((p) => INTERESTING_CATEGORIES.includes(p.category) && p.content.length > 30);
 }
 
+// ── Gartner insight collection ────────────────────────────────────────────────
+
+interface GartnerInsightForSummary {
+  companyName: string;
+  type: "like" | "dislike";
+  text: string;
+}
+
+async function collectGartnerInsights(): Promise<GartnerInsightForSummary[]> {
+  const rows = await db
+    .select({
+      companyName: companies.name,
+      type: gartnerInsights.type,
+      text: gartnerInsights.text,
+    })
+    .from(gartnerInsights)
+    .innerJoin(companies, eq(gartnerInsights.companyId, companies.id))
+    .where(eq(companies.isActive, true))
+    .orderBy(desc(gartnerInsights.scrapedAt));
+
+  // Keep up to 3 likes and 3 dislikes per company
+  const counts: Record<string, { like: number; dislike: number }> = {};
+  const result: GartnerInsightForSummary[] = [];
+  for (const r of rows) {
+    const key = r.companyName;
+    if (!counts[key]) counts[key] = { like: 0, dislike: 0 };
+    const t = r.type as "like" | "dislike";
+    if (counts[key][t] < 3) {
+      counts[key][t]++;
+      result.push({ companyName: r.companyName, type: t, text: r.text ?? "" });
+    }
+  }
+  return result;
+}
+
 // ── Prompt builder ────────────────────────────────────────────────────────────
 
-function buildPrompt(posts: PostForSummary[], companyNames: string[]): string {
+function buildPrompt(
+  posts: PostForSummary[],
+  companyNames: string[],
+  gartnerData: GartnerInsightForSummary[]
+): string {
   const tracked = companyNames.join(", ");
 
   const grouped: Partial<Record<PostCategory, PostForSummary[]>> = {};
@@ -93,19 +133,35 @@ function buildPrompt(posts: PostForSummary[], companyNames: string[]): string {
     sections.push("");
   }
 
-  if (sections.length === 0) return "NO_INTERESTING_POSTS";
+  if (sections.length === 0 && gartnerData.length === 0) return "NO_INTERESTING_POSTS";
+
+  // Build Gartner section
+  let gartnerSection = "";
+  if (gartnerData.length > 0) {
+    const byCompany: Record<string, { likes: string[]; dislikes: string[] }> = {};
+    for (const g of gartnerData) {
+      if (!byCompany[g.companyName]) byCompany[g.companyName] = { likes: [], dislikes: [] };
+      if (g.type === "like") byCompany[g.companyName].likes.push(g.text.slice(0, 300));
+      else byCompany[g.companyName].dislikes.push(g.text.slice(0, 300));
+    }
+    const lines: string[] = ["[GARTNER CUSTOMER REVIEWS]"];
+    for (const [company, { likes, dislikes }] of Object.entries(byCompany)) {
+      if (likes.length) lines.push(`${company} LIKES:\n${likes.map((t) => `  + ${t}`).join("\n")}`);
+      if (dislikes.length) lines.push(`${company} DISLIKES:\n${dislikes.map((t) => `  - ${t}`).join("\n")}`);
+    }
+    gartnerSection = lines.join("\n");
+  }
+
+  const postsSection = sections.length > 0 ? `LINKEDIN POSTS:\n${sections.join("\n")}` : "";
 
   return `
-You are a cybersecurity market analyst. Below are recent LinkedIn posts from tracked companies: ${tracked}.
+You are a cybersecurity market analyst. You have data on tracked companies: ${tracked}.
 
-Summarize ONLY the key business events: partnerships, product launches, funding, notable technology news, and awards/recognition.
-Skip generic marketing, event recaps, or promotional posts with no substance.
-Be concise and factual. Use bullet points grouped by theme. If something is a new integration or partnership, name both parties.
-Don't mention people joining the company.
-Write in a professional tone, as if briefing a CISO or investor.
+Your job is to surface actionable competitive intelligence — not to describe content, but to derive what it MEANS for a buyer, competitor, or investor.
 
-POSTS:
-${sections.join("\n")}
+${postsSection}
+
+${gartnerSection}
 
 FORMAT your response exactly like this (use markdown):
 ## 🤝 Partnerships & Integrations
@@ -118,9 +174,15 @@ FORMAT your response exactly like this (use markdown):
 - bullet
 ## 🏆 Recognition & Awards
 - bullet
+## 🎯 Customer Intelligence (Gartner)
+- bullet
 
-Only include sections that have actual content. Start bullets with the company name in **bold**.
-If there is nothing interesting to report, reply with: "No significant events this week."
+Rules:
+- LinkedIn sections: summarize key business events only. Skip generic marketing. Name both parties in partnerships.
+- Customer Intelligence section: based on Gartner reviews, derive INSIGHTS — not summaries. E.g. "Armis leads in OT/IoT asset visibility but has high operational overhead", not just "customers like visibility". Identify patterns across likes/dislikes. Call out competitive strengths and weaknesses per vendor. Be opinionated.
+- Only include sections that have actual content.
+- Start bullets with the company name in **bold**.
+- Write as if briefing a CISO or investor. Be concise and factual.
 `.trim();
 }
 
@@ -146,9 +208,12 @@ export async function generateAISummary(forceRefresh = false): Promise<string> {
     .where(eq(companies.isActive, true));
 
   const companyNames = allCompanies.map((c) => c.name);
-  const posts = await collectInterestingPosts(7);
+  const [posts, gartnerData] = await Promise.all([
+    collectInterestingPosts(7),
+    collectGartnerInsights(),
+  ]);
 
-  if (posts.length === 0) {
+  if (posts.length === 0 && gartnerData.length === 0) {
     const msg = "No significant events detected this week. Run a scrape to collect fresh data.";
     if (latestRun) {
       await db
@@ -159,7 +224,7 @@ export async function generateAISummary(forceRefresh = false): Promise<string> {
     return msg;
   }
 
-  const prompt = buildPrompt(posts, companyNames);
+  const prompt = buildPrompt(posts, companyNames, gartnerData);
   const summary = await callGemini(prompt);
 
   if (latestRun) {
