@@ -18,12 +18,17 @@ export function buildCompanyInput(companyUrls: string[]) {
   };
 }
 
-/** Batch all company URLs in a single run to get recent posts. */
+/** Batch all company URLs in a single run to get recent posts.
+ *  Posts mode requires a LinkedIn li_at session cookie (Voyager feed API).
+ *  Set LINKEDIN_LI_AT_COOKIE in your environment variables.
+ */
 export function buildPostsInput(companyUrls: string[]) {
+  const cookie = process.env.LINKEDIN_LI_AT_COOKIE;
   return {
     urls: companyUrls,
     mode: "posts",
     maxResults: companyUrls.length * 20, // up to 20 posts per company
+    ...(cookie ? { cookie } : {}),
   };
 }
 
