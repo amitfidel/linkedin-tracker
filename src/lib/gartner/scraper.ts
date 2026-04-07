@@ -1,6 +1,13 @@
 /**
  * Try to auto-discover a company's Gartner Peer Insights likes-dislikes URL.
- * Uses ScraperAPI to search Gartner and extract the vendor page URL.
+ *
+ * Strategy: search DuckDuckGo HTML (no JS rendering needed — direct hrefs)
+ * for "site:gartner.com/reviews {name} likes-dislikes" and extract the first
+ * matching /reviews/market/{market}/vendor/{vendor}[/product/{p}]/likes-dislikes URL.
+ *
+ * Falls back to any /reviews/market/{market}/vendor/{vendor} URL if no
+ * likes-dislikes page is found directly, appending /likes-dislikes to it.
+ *
  * Returns null if not found or if ScraperAPI is unavailable.
  */
 export async function discoverGartnerUrl(companyName: string): Promise<string | null> {
@@ -10,10 +17,12 @@ export async function discoverGartnerUrl(companyName: string): Promise<string | 
     return null;
   }
 
-  const searchUrl = `https://www.gartner.com/reviews/search?q=${encodeURIComponent(companyName)}`;
-  const proxied = `http://api.scraperapi.com?api_key=${scraperApiKey}&url=${encodeURIComponent(searchUrl)}&render=true`;
+  // DuckDuckGo HTML endpoint — returns plain HTML with direct href links, no JS required
+  const query = `site:gartner.com/reviews ${companyName} likes-dislikes`;
+  const searchUrl = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`;
+  const proxied = `http://api.scraperapi.com?api_key=${scraperApiKey}&url=${encodeURIComponent(searchUrl)}&render=false`;
 
-  console.log(`[Gartner:discover] Searching Gartner for: ${companyName}`);
+  console.log(`[Gartner:discover] DDG-searching Gartner for: ${companyName}`);
 
   try {
     const res = await fetch(proxied, {
@@ -26,36 +35,36 @@ export async function discoverGartnerUrl(companyName: string): Promise<string | 
     });
 
     if (!res.ok) {
-      console.warn(`[Gartner:discover] Search page returned HTTP ${res.status}`);
+      console.warn(`[Gartner:discover] DDG search returned HTTP ${res.status}`);
       return null;
     }
 
     const html = await res.text();
 
-    // Look for vendor review page links — pattern: /reviews/market/{market}/vendor/{vendor}
-    // We want the most specific match that includes the company name slug
-    const vendorPattern = /href="(\/reviews\/market\/[a-z0-9-]+\/vendor\/[a-z0-9-]+)(?:\/[^"]*)?"/gi;
-    const nameSlug = companyName.toLowerCase().replace(/[^a-z0-9]/g, "-").replace(/-+/g, "-");
-    const matches: string[] = [];
-
-    let m;
-    while ((m = vendorPattern.exec(html)) !== null) {
-      const path = m[1];
-      // Deduplicate
-      if (!matches.includes(path)) matches.push(path);
+    // ── Priority 1: exact likes-dislikes page ───────────────────────────────
+    // Matches: gartner.com/reviews/market/{mkt}/vendor/{v}[/product/{p}]/likes-dislikes
+    const likesDislikes =
+      /(?:https?:)?\/\/(?:www\.)?gartner\.com(\/reviews\/market\/[a-z0-9-]+\/vendor\/[a-z0-9-]+(?:\/product\/[a-z0-9-]+)?\/likes-dislikes)/gi;
+    const ldMatch = likesDislikes.exec(html);
+    if (ldMatch) {
+      const url = `https://www.gartner.com${ldMatch[1]}`;
+      console.log(`[Gartner:discover] Found likes-dislikes URL for ${companyName}: ${url}`);
+      return url;
     }
 
-    if (matches.length === 0) {
-      console.log(`[Gartner:discover] No vendor URLs found for ${companyName}`);
-      return null;
+    // ── Priority 2: vendor page (append /likes-dislikes) ────────────────────
+    // Matches: gartner.com/reviews/market/{mkt}/vendor/{v}  (no product path)
+    const vendorPage =
+      /(?:https?:)?\/\/(?:www\.)?gartner\.com(\/reviews\/market\/[a-z0-9-]+\/vendor\/[a-z0-9-]+)(?=[^a-z0-9/-]|\/(?!product)[^a-z]|$)/gi;
+    const vpMatch = vendorPage.exec(html);
+    if (vpMatch) {
+      const url = `https://www.gartner.com${vpMatch[1]}/likes-dislikes`;
+      console.log(`[Gartner:discover] Derived likes-dislikes URL for ${companyName}: ${url}`);
+      return url;
     }
 
-    // Prefer a match where the vendor slug contains the company name
-    const preferred = matches.find((p) => p.toLowerCase().includes(nameSlug)) ?? matches[0];
-    const gartnerUrl = `https://www.gartner.com${preferred}/likes-dislikes`;
-
-    console.log(`[Gartner:discover] Found Gartner URL for ${companyName}: ${gartnerUrl}`);
-    return gartnerUrl;
+    console.log(`[Gartner:discover] No Gartner URL found for ${companyName}`);
+    return null;
   } catch (e) {
     console.warn("[Gartner:discover] Failed:", e instanceof Error ? e.message : e);
     return null;
