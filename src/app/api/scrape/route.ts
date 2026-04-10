@@ -1,10 +1,20 @@
 export const dynamic = "force-dynamic";
 import { NextRequest, NextResponse } from "next/server";
 import { runPipeline, runGartnerOnly } from "@/lib/pipeline/orchestrator";
+import { db } from "@/db";
+import { scrapeRuns } from "@/db/schema";
+import { eq, and, lt } from "drizzle-orm";
 
 let isRunning = false;
 
 export async function POST(req: NextRequest) {
+  // Clean up any "running" records older than 30 minutes (server restart / crash)
+  const thirtyMinutesAgo = new Date(Date.now() - 30 * 60 * 1000).toISOString();
+  await db
+    .update(scrapeRuns)
+    .set({ status: "failed", completedAt: new Date().toISOString(), errorMessage: "Interrupted (server restart)" })
+    .where(and(eq(scrapeRuns.status, "running"), lt(scrapeRuns.startedAt, thirtyMinutesAgo)));
+
   if (isRunning) {
     return NextResponse.json(
       { error: "A scrape is already in progress" },

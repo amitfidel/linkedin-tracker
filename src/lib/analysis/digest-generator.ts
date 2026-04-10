@@ -12,6 +12,9 @@ import { categorizePost } from "./post-categorizer";
 
 export async function generateWeeklyDigest() {
   const weekAgo = new Date(Date.now() - 7 * 86400000).toISOString();
+  // Fetch a wider window for display purposes (30 days) so company cards always
+  // show recent posts even if the company hasn't posted in the last 7 days.
+  const monthAgo = new Date(Date.now() - 30 * 86400000).toISOString();
 
   // ── All active companies ───────────────────────────────────────────────────
   const activeCompanies = await db
@@ -20,7 +23,9 @@ export async function generateWeeklyDigest() {
     .where(eq(companies.isActive, true))
     .orderBy(companies.name);
 
-  // ── Recent posts (all companies, last 7 days) ──────────────────────────────
+  // ── All posts from last 30 days (for company card display) ─────────────────
+  // Filtered by postedAt so posts reflect when LinkedIn published them,
+  // not when we scraped them (avoids posts vanishing after 7 days from DB insert)
   const recentPosts = await db
     .select({
       id: companyPosts.id,
@@ -36,8 +41,8 @@ export async function generateWeeklyDigest() {
       hashtags: companyPosts.hashtags,
     })
     .from(companyPosts)
-    .where(gte(companyPosts.scrapedAt, weekAgo))
-    .orderBy(desc(companyPosts.scrapedAt));
+    .where(gte(companyPosts.postedAt, monthAgo))
+    .orderBy(desc(companyPosts.postedAt));
 
   // ── Active jobs per company ────────────────────────────────────────────────
   const jobCounts = await db
@@ -90,26 +95,33 @@ export async function generateWeeklyDigest() {
 
   // ── Build per-company cards ────────────────────────────────────────────────
   const companyCards = activeCompanies.map((company) => {
-    const posts = recentPosts
+    // All posts from the 30-day window for this company (sorted by postedAt desc)
+    const allCompanyPosts = recentPosts
       .filter((p) => p.companyId === company.id)
       .map((p) => ({
         ...p,
         category: categorizePost(p.content ?? ""),
-      }))
-      // Sort: non-general categories first (they're more interesting), then by likes
-      .sort((a, b) => {
-        const aGeneral = a.category === "general" ? 1 : 0;
-        const bGeneral = b.category === "general" ? 1 : 0;
-        if (aGeneral !== bGeneral) return aGeneral - bGeneral;
-        return (b.likesCount ?? 0) - (a.likesCount ?? 0);
-      });
+      }));
+
+    // Posts from this week only — used for the "This week:" category badges
+    const thisWeekPosts = allCompanyPosts.filter(
+      (p) => (p.postedAt ?? "") >= weekAgo
+    );
+
+    // For display: prefer interesting (non-general) posts first, then by likes
+    const sortedPosts = [...allCompanyPosts].sort((a, b) => {
+      const aGeneral = a.category === "general" ? 1 : 0;
+      const bGeneral = b.category === "general" ? 1 : 0;
+      if (aGeneral !== bGeneral) return aGeneral - bGeneral;
+      return (b.likesCount ?? 0) - (a.likesCount ?? 0);
+    });
 
     const snap = snapshotMap.get(company.id);
     const activeJobCount = jobCountMap.get(company.id) ?? 0;
 
-    // Category breakdown for this company
+    // Category breakdown = this week's posts only (shown in "This week:" badges)
     const categoryCounts: Record<string, number> = {};
-    for (const p of posts) {
+    for (const p of thisWeekPosts) {
       categoryCounts[p.category] = (categoryCounts[p.category] ?? 0) + 1;
     }
 
@@ -124,10 +136,11 @@ export async function generateWeeklyDigest() {
       employeeCount: snap?.employeeCount ?? company.employeeCount,
       followerCount: snap?.followerCount,
       activeJobCount,
-      postCount: posts.length,
+      // postCount reflects 7-day activity for summary stats
+      postCount: thisWeekPosts.length,
       categoryCounts,
-      // Top 5 posts to show in the card (prefer interesting categories)
-      posts: posts.slice(0, 5),
+      // Top 5 posts to show in the card (from 30-day window, best first)
+      posts: sortedPosts.slice(0, 5),
       gartnerUrl: company.gartnerUrl,
       gartnerInsights: insightsMap.get(company.id) ?? null,
     };
@@ -147,9 +160,11 @@ export async function generateWeeklyDigest() {
     .limit(1)
     .get();
 
+  // Weekly stats use the 7-day postedAt window only
+  const postsThisWeek = recentPosts.filter((p) => (p.postedAt ?? "") >= weekAgo);
   const companiesWithPosts = companyCards.filter((c) => c.postCount > 0).length;
-  const totalPostsThisWeek = recentPosts.length;
-  const interestingPostsCount = recentPosts.filter(
+  const totalPostsThisWeek = postsThisWeek.length;
+  const interestingPostsCount = postsThisWeek.filter(
     (p) => categorizePost(p.content ?? "") !== "general"
   ).length;
 
