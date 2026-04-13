@@ -19,10 +19,14 @@ const FETCH_HEADERS = {
 };
 
 async function launchBrowser() {
-  return chromium.launch({
-    channel: "chrome",
-    headless: HEADLESS,
-  });
+  // Timeout after 10s — on Railway (no Chrome), this prevents hanging
+  const timeout = new Promise<never>((_, reject) =>
+    setTimeout(() => reject(new Error("Browser launch timed out (no Chrome?)")), 10_000)
+  );
+  return Promise.race([
+    chromium.launch({ channel: "chrome", headless: HEADLESS }),
+    timeout,
+  ]);
 }
 
 /**
