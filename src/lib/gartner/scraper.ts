@@ -18,15 +18,19 @@ const FETCH_HEADERS = {
   "Accept-Language": "en-US,en;q=0.9",
 };
 
+/** Returns null on Railway (no Chrome available). */
 async function launchBrowser() {
-  // Timeout after 10s — on Railway (no Chrome), this prevents hanging
-  const timeout = new Promise<never>((_, reject) =>
-    setTimeout(() => reject(new Error("Browser launch timed out (no Chrome?)")), 10_000)
-  );
-  return Promise.race([
-    chromium.launch({ channel: "chrome", headless: HEADLESS }),
-    timeout,
-  ]);
+  // On Railway / production, skip browser launch entirely — no Chrome available.
+  // Set GARTNER_LOCAL=1 in .env to enable Playwright-based scraping locally.
+  if (!process.env.GARTNER_LOCAL && process.env.RAILWAY_ENVIRONMENT) {
+    return null;
+  }
+
+  try {
+    return await chromium.launch({ channel: "chrome", headless: HEADLESS });
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -41,11 +45,9 @@ export async function discoverGartnerUrl(
 ): Promise<string | null> {
   console.log(`[Gartner:discover] Searching for Gartner URL: ${companyName}`);
 
-  let browser;
-  try {
-    browser = await launchBrowser();
-  } catch (e) {
-    console.warn("[Gartner:discover] Could not launch browser:", e instanceof Error ? e.message : e);
+  const browser = await launchBrowser();
+  if (!browser) {
+    console.log("[Gartner:discover] No browser available — skipping discovery");
     return null;
   }
 
@@ -254,11 +256,9 @@ async function fetchBuildIdJson(gartnerUrl: string, buildId: string): Promise<Ga
 async function scrapeViaPlaywright(gartnerUrl: string): Promise<GartnerInsight[]> {
   console.log("[Gartner:pw] Trying Playwright scrape:", gartnerUrl);
 
-  let browser;
-  try {
-    browser = await launchBrowser();
-  } catch (e) {
-    console.warn("[Gartner:pw] Could not launch browser (expected on Railway):", e instanceof Error ? e.message : e);
+  const browser = await launchBrowser();
+  if (!browser) {
+    console.log("[Gartner:pw] No browser available (expected on Railway) — skipping Playwright");
     return [];
   }
 
