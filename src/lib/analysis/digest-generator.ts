@@ -89,8 +89,8 @@ export async function generateWeeklyDigest() {
       insightsMap.set(insight.companyId, { likes: [], dislikes: [] });
     }
     const entry = insightsMap.get(insight.companyId)!;
-    if (insight.type === "like" && entry.likes.length < 3) entry.likes.push(insight.text);
-    if (insight.type === "dislike" && entry.dislikes.length < 3) entry.dislikes.push(insight.text);
+    if (insight.type === "like" && entry.likes.length < 2) entry.likes.push(insight.text);
+    if (insight.type === "dislike" && entry.dislikes.length < 2) entry.dislikes.push(insight.text);
   }
 
   // ── Build per-company cards ────────────────────────────────────────────────

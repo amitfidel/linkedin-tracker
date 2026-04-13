@@ -233,41 +233,41 @@ function CompanyIntelCard({ company }: { company: CompanyCard }) {
         )}
       </div>
 
-      {/* ── Gartner Peer Insights (compact: 1 like + 1 dislike) ─────────────── */}
+      {/* ── Gartner Peer Insights (last 2 likes + 2 dislikes) ──────────────── */}
       {hasGartner && (
         <div className="px-5 pb-4 pt-3 border-t space-y-2.5">
           <div className="flex items-center justify-between">
             <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
               Gartner Peer Insights
             </p>
-            {company.gartnerUrl && totalInsights > 2 && (
+            {company.gartnerUrl && (
               <a
                 href={company.gartnerUrl}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="text-xs text-blue-500 hover:underline flex items-center gap-0.5"
               >
-                {totalInsights - 2} more <ExternalLink className="h-2.5 w-2.5" />
+                View all <ExternalLink className="h-2.5 w-2.5" />
               </a>
             )}
           </div>
           <div className="space-y-2">
-            {likes[0] && (
-              <div className="flex gap-2">
+            {likes.slice(0, 2).map((text, i) => (
+              <div key={`like-${i}`} className="flex gap-2">
                 <span className="text-green-500 text-xs shrink-0 mt-0.5">👍</span>
                 <p className="text-xs text-muted-foreground line-clamp-2 leading-relaxed">
-                  {likes[0].length > 140 ? likes[0].slice(0, 140) + "…" : likes[0]}
+                  {text.length > 140 ? text.slice(0, 140) + "…" : text}
                 </p>
               </div>
-            )}
-            {dislikes[0] && (
-              <div className="flex gap-2">
+            ))}
+            {dislikes.slice(0, 2).map((text, i) => (
+              <div key={`dislike-${i}`} className="flex gap-2">
                 <span className="text-amber-500 text-xs shrink-0 mt-0.5">👎</span>
                 <p className="text-xs text-muted-foreground line-clamp-2 leading-relaxed">
-                  {dislikes[0].length > 140 ? dislikes[0].slice(0, 140) + "…" : dislikes[0]}
+                  {text.length > 140 ? text.slice(0, 140) + "…" : text}
                 </p>
               </div>
-            )}
+            ))}
           </div>
         </div>
       )}

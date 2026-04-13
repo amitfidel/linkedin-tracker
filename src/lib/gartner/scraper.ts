@@ -10,6 +10,14 @@ export interface GartnerInsight {
 
 const HEADLESS = !process.env.PLAYWRIGHT_HEADFUL;
 
+const FETCH_HEADERS = {
+  "User-Agent":
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36",
+  Accept:
+    "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+  "Accept-Language": "en-US,en;q=0.9",
+};
+
 async function launchBrowser() {
   return chromium.launch({
     channel: "chrome",
@@ -21,28 +29,32 @@ async function launchBrowser() {
  * Auto-discover a company's Gartner Peer Insights likes-dislikes URL.
  *
  * Uses Playwright + DuckDuckGo to find the URL without any paid proxy.
+ * Only works in headful mode (DDG shows CAPTCHA in headless).
+ * This is a one-time operation — the URL gets saved to the DB.
  */
 export async function discoverGartnerUrl(
   companyName: string
 ): Promise<string | null> {
   console.log(`[Gartner:discover] Searching for Gartner URL: ${companyName}`);
 
-  const browser = await launchBrowser();
+  let browser;
+  try {
+    browser = await launchBrowser();
+  } catch (e) {
+    console.warn("[Gartner:discover] Could not launch browser:", e instanceof Error ? e.message : e);
+    return null;
+  }
+
   try {
     const page = await browser.newPage();
 
     const query = `site:gartner.com/reviews ${companyName} likes-dislikes`;
 
-    // DuckDuckGo HTML endpoint — works reliably in headful mode.
-    // In headless mode DDG shows a CAPTCHA, so discovery may only work
-    // when PLAYWRIGHT_HEADFUL=1 is set. This is acceptable since discovery
-    // is a one-time operation per company (URL gets saved to the DB).
     await page.goto(
       `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`,
       { waitUntil: "domcontentloaded", timeout: 30_000 }
     );
 
-    // Extract all hrefs — DDG wraps links in /l/?uddg=<encoded_url>
     const gartnerUrls = await page.evaluate(() => {
       return Array.from(document.querySelectorAll("a[href]"))
         .map((a) => {
@@ -62,7 +74,7 @@ export async function discoverGartnerUrl(
 
     console.log(`[Gartner:discover] Found ${gartnerUrls.length} Gartner URLs from DDG`);
 
-    // Priority 1: URL that already has /likes-dislikes (most specific)
+    // Priority 1: URL with /likes-dislikes
     const ldUrl = gartnerUrls.find((u) =>
       /\/reviews\/market\/[a-z0-9-]+\/vendor\/[a-z0-9-]+.*\/likes-dislikes/i.test(u)
     );
@@ -77,7 +89,7 @@ export async function discoverGartnerUrl(
       }
     }
 
-    // Priority 2: any vendor/product page — append /likes-dislikes
+    // Priority 2: vendor/product page — append /likes-dislikes
     const vpUrl = gartnerUrls.find((u) =>
       /\/reviews\/market\/[a-z0-9-]+\/vendor\/[a-z0-9-]+/i.test(u)
     );
@@ -103,88 +115,183 @@ export async function discoverGartnerUrl(
   }
 }
 
+// ── Vendor-snippets type used by both fetch and Playwright strategies ────────
+
+interface VendorSnippets {
+  favorable?: Array<{
+    reviewId: number;
+    jobTitle?: string;
+    function?: string;
+    answers?: {
+      "lessonslearned-like-most"?: string;
+      "lessonslearned-dislike-most"?: string;
+    };
+  }>;
+  critical?: Array<{
+    reviewId: number;
+    jobTitle?: string;
+    function?: string;
+    answers?: {
+      "lessonslearned-like-most"?: string;
+      "lessonslearned-dislike-most"?: string;
+    };
+  }>;
+}
+
 /**
- * Scrape Gartner Peer Insights likes/dislikes using Playwright.
+ * Scrape Gartner Peer Insights likes/dislikes.
  *
- * Launches a real Chrome browser, navigates to the page, and extracts
- * review data from the DOM. No ScraperAPI or paid proxy needed.
- *
- * The page has two card types:
- *   1. "Overall review panel" cards at the top — labeled FAVORABLE/CRITICAL,
- *      with headline, role, industry, but review body is blurred/placeholder.
- *   2. "Review cards" lower on the page — have real summary text, headline,
- *      role, industry, but no explicit favorable/critical label.
- *
- * Strategy: extract from panel cards (type from label, text from headline),
- * then also extract from review cards (real summary text, infer type from
- * whether the card appeared near favorable/critical context or from rating).
+ * Two strategies tried in order:
+ *   1. Fetch-based: plain HTTP fetch → extract __NEXT_DATA__ or buildId JSON.
+ *      Works on Railway (no browser needed). May fail if Cloudflare blocks.
+ *   2. Playwright-based: launch Chrome, render page, extract from DOM.
+ *      Works locally. Falls back here if fetch fails.
  */
 export async function scrapeGartnerInsights(
   gartnerUrl: string,
   _existingReviewUrls: Set<string> = new Set()
 ): Promise<GartnerInsight[]> {
-  console.log("[Gartner] Scraping with Playwright:", gartnerUrl);
+  // Strategy 1: fetch-based (works on Railway, no browser needed)
+  const fetchResult = await scrapeViaFetch(gartnerUrl);
+  if (fetchResult.length > 0) return fetchResult;
 
-  const browser = await launchBrowser();
+  // Strategy 2: Playwright-based (works locally with Chrome)
+  return scrapeViaPlaywright(gartnerUrl);
+}
+
+// ── Strategy 1: Fetch-based (no browser) ────────────────────────────────────
+
+async function scrapeViaFetch(gartnerUrl: string): Promise<GartnerInsight[]> {
+  console.log("[Gartner:fetch] Trying fetch-based scrape:", gartnerUrl);
+
+  try {
+    const res = await fetch(gartnerUrl, {
+      headers: FETCH_HEADERS,
+      signal: AbortSignal.timeout(30_000),
+    });
+
+    if (!res.ok) {
+      console.log(`[Gartner:fetch] HTTP ${res.status} — will try Playwright`);
+      return [];
+    }
+
+    const html = await res.text();
+
+    // Try __NEXT_DATA__ from the HTML
+    const nextDataMatch = html.match(
+      /<script id="__NEXT_DATA__" type="application\/json">([\s\S]*?)<\/script>/
+    );
+    if (nextDataMatch) {
+      try {
+        const data = JSON.parse(nextDataMatch[1]);
+        const snippets = data?.props?.pageProps?.serverSideXHRData?.["vendor-snippets"] as VendorSnippets | undefined;
+        if (snippets?.favorable || snippets?.critical) {
+          console.log("[Gartner:fetch] Got snippets from __NEXT_DATA__");
+          return extractFromNextData(snippets, gartnerUrl);
+        }
+        // If __NEXT_DATA__ exists but no snippets, try the buildId JSON endpoint
+        const buildId = data?.buildId as string | undefined;
+        if (buildId) {
+          const result = await fetchBuildIdJson(gartnerUrl, buildId);
+          if (result.length > 0) return result;
+        }
+      } catch {
+        // parse error — continue
+      }
+    }
+
+    // Try extracting buildId from script src attributes
+    const buildIdMatch = html.match(/\/_next\/static\/([a-f0-9]{20,})\//);
+    if (buildIdMatch) {
+      const result = await fetchBuildIdJson(gartnerUrl, buildIdMatch[1]);
+      if (result.length > 0) return result;
+    }
+
+    console.log("[Gartner:fetch] No data extracted via fetch");
+    return [];
+  } catch (e) {
+    console.log("[Gartner:fetch] Fetch failed:", e instanceof Error ? e.message : e);
+    return [];
+  }
+}
+
+async function fetchBuildIdJson(gartnerUrl: string, buildId: string): Promise<GartnerInsight[]> {
+  const urlObj = new URL(gartnerUrl);
+  const pagePath = urlObj.pathname.replace(/^\/reviews/, "");
+  const jsonUrl = `${urlObj.origin}/reviews/_next/data/${buildId}${pagePath}.json`;
+
+  console.log("[Gartner:fetch] Trying buildId JSON:", jsonUrl);
+
+  try {
+    const res = await fetch(jsonUrl, {
+      headers: { ...FETCH_HEADERS, Accept: "application/json, */*", "x-nextjs-data": "1", Referer: gartnerUrl },
+      signal: AbortSignal.timeout(15_000),
+    });
+
+    if (!res.ok) return [];
+
+    const text = await res.text();
+    if (!text.trim().startsWith("{")) return [];
+
+    const data = JSON.parse(text);
+    const snippets = data?.pageProps?.serverSideXHRData?.["vendor-snippets"] as VendorSnippets | undefined;
+    if (snippets?.favorable || snippets?.critical) {
+      console.log("[Gartner:fetch] Got snippets from buildId JSON");
+      return extractFromNextData(snippets!, gartnerUrl);
+    }
+  } catch {
+    // continue
+  }
+  return [];
+}
+
+// ── Strategy 2: Playwright-based (local Chrome) ─────────────────────────────
+
+async function scrapeViaPlaywright(gartnerUrl: string): Promise<GartnerInsight[]> {
+  console.log("[Gartner:pw] Trying Playwright scrape:", gartnerUrl);
+
+  let browser;
+  try {
+    browser = await launchBrowser();
+  } catch (e) {
+    console.warn("[Gartner:pw] Could not launch browser (expected on Railway):", e instanceof Error ? e.message : e);
+    return [];
+  }
+
   try {
     const context = await browser.newContext({
-      userAgent:
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36",
+      userAgent: FETCH_HEADERS["User-Agent"],
       viewport: { width: 1280, height: 900 },
     });
     const page = await context.newPage();
 
-    await page.goto(gartnerUrl, {
-      waitUntil: "domcontentloaded",
-      timeout: 45_000,
-    });
+    await page.goto(gartnerUrl, { waitUntil: "domcontentloaded", timeout: 45_000 });
 
-    // Wait for review cards to render (timeout is non-fatal — page may have no reviews)
     await page.waitForSelector("[class*='reviewCard']", { timeout: 15_000 }).catch(() => {
-      console.log("[Gartner] No review cards found within timeout — page may have no reviews");
+      console.log("[Gartner:pw] No review cards within timeout");
     });
 
-    // Strategy 1: Try __NEXT_DATA__ JSON (best data when available)
+    // Try __NEXT_DATA__
     const nextDataInsights = await page.evaluate(() => {
       const el = document.getElementById("__NEXT_DATA__");
       if (!el) return null;
       try {
         const data = JSON.parse(el.textContent || "");
-        const snippets =
-          data?.props?.pageProps?.serverSideXHRData?.["vendor-snippets"];
+        const snippets = data?.props?.pageProps?.serverSideXHRData?.["vendor-snippets"];
         if (!snippets?.favorable && !snippets?.critical) return null;
-        return snippets as {
-          favorable?: Array<{
-            reviewId: number;
-            jobTitle?: string;
-            function?: string;
-            answers?: {
-              "lessonslearned-like-most"?: string;
-              "lessonslearned-dislike-most"?: string;
-            };
-          }>;
-          critical?: Array<{
-            reviewId: number;
-            jobTitle?: string;
-            function?: string;
-            answers?: {
-              "lessonslearned-like-most"?: string;
-              "lessonslearned-dislike-most"?: string;
-            };
-          }>;
-        };
+        return snippets;
       } catch {
         return null;
       }
-    });
+    }) as VendorSnippets | null;
 
     if (nextDataInsights) {
-      console.log("[Gartner] Extracted data from __NEXT_DATA__");
+      console.log("[Gartner:pw] Extracted data from __NEXT_DATA__");
       return extractFromNextData(nextDataInsights, gartnerUrl);
     }
 
-    // Strategy 2: Extract from rendered DOM using known Gartner class patterns
-    console.log("[Gartner] __NEXT_DATA__ not available, extracting from DOM...");
+    // Extract from rendered DOM
+    console.log("[Gartner:pw] Extracting from DOM...");
 
     const domInsights = await page.evaluate((baseUrl: string) => {
       const results: Array<{
@@ -196,95 +303,55 @@ export async function scrapeGartnerInsights(
       }> = [];
       const seenTexts = new Set<string>();
 
-      // ── Panel cards (top of page) ─────────────────────────────────────
-      // These have FAVORABLE/CRITICAL labels. The body text is blurred
-      // placeholder, but the headline is real and useful.
-      // Class pattern: overall-review-panel_reviewCard__*
+      // Panel cards (FAVORABLE/CRITICAL labels)
       const panelCards = document.querySelectorAll("[class*='overall-review-panel_reviewCard']");
-
       for (const card of panelCards) {
-        // Determine type from the FAVORABLE/CRITICAL label
-        const typeLabel =
-          card.querySelector("[class*='reviewTypeRight']")?.textContent?.trim().toUpperCase() || "";
-        const hasFavorableDot = card.querySelector("[class*='reviewTypeDot--favorable']");
+        const typeLabel = card.querySelector("[class*='reviewTypeRight']")?.textContent?.trim().toUpperCase() || "";
         const hasCriticalDot = card.querySelector("[class*='reviewTypeDot--critical']");
+        const hasFavorableDot = card.querySelector("[class*='reviewTypeDot--favorable']");
 
-        const type: "like" | "dislike" =
-          typeLabel === "CRITICAL" || hasCriticalDot ? "dislike" : "like";
+        const headline = card.querySelector("[class*='reviewHeadline']")?.textContent?.trim()
+          .replace(/^\u201c|\u201d$/g, "").replace(/^"|"$/g, "") || "";
 
-        // Headline is the most reliable text (not blurred)
-        const headline =
-          card.querySelector("[class*='reviewHeadline']")?.textContent?.trim()
-            .replace(/^\u201c|\u201d$/g, "").replace(/^"|"$/g, "") || "";
-
-        // Check if the summary is blurred (placeholder text)
         const summaryEl = card.querySelector("[class*='reviewSummary']");
         const isBlurred = summaryEl?.className?.includes("blurred") ?? true;
         const isPlaceholder = summaryEl?.textContent?.includes("placeholder") ?? false;
         const summaryText = (!isBlurred && !isPlaceholder) ? summaryEl?.textContent?.trim() : "";
 
-        // Use real summary if available, otherwise use the headline
         const text = summaryText || headline;
-        if (!text || text.length < 5) continue;
-        if (seenTexts.has(text)) continue;
+        if (!text || text.length < 5 || seenTexts.has(text)) continue;
         seenTexts.add(text);
 
-        const role =
-          card.querySelector("[class*='reviewerRole']")?.textContent?.trim() || "";
-        const industry =
-          card.querySelector("[class*='reviewerCompanyIndustry']")?.textContent?.trim() || "";
-
-        // If we don't have the FAVORABLE/CRITICAL dot, try to detect by rating
-        const hasFavorable = hasFavorableDot !== null;
-        const hasCritical = hasCriticalDot !== null;
-
         results.push({
-          type: hasCritical ? "dislike" : hasFavorable ? "like" : type,
+          type: hasCriticalDot ? "dislike" : hasFavorableDot ? "like" : (typeLabel === "CRITICAL" ? "dislike" : "like"),
           text,
           reviewUrl: baseUrl,
-          reviewerRole: role,
-          reviewerIndustry: industry,
+          reviewerRole: card.querySelector("[class*='reviewerRole']")?.textContent?.trim() || "",
+          reviewerIndustry: card.querySelector("[class*='reviewerCompanyIndustry']")?.textContent?.trim() || "",
         });
       }
 
-      // ── Review cards (lower section, real text) ───────────────────────
-      // Class pattern: review-card_reviewCard__*
-      // These have actual review summary text (not blurred).
+      // Review cards (real summary text)
       const reviewCards = document.querySelectorAll("[class*='review-card_reviewCard']");
-
       for (const card of reviewCards) {
-        const headline =
-          card.querySelector("[class*='review-card_reviewHeadline']")?.textContent?.trim() || "";
-        const summaryEl = card.querySelector("[class*='review-card_reviewSummary']");
-        const summaryRaw = summaryEl?.textContent?.trim() || "";
-        // Skip placeholder/blurred text that Gartner shows to non-logged-in users
+        const headline = card.querySelector("[class*='review-card_reviewHeadline']")?.textContent?.trim() || "";
+        const summaryRaw = card.querySelector("[class*='review-card_reviewSummary']")?.textContent?.trim() || "";
         const summary = summaryRaw.includes("placeholder") ? "" : summaryRaw;
 
         const text = summary || headline;
-        if (!text || text.length < 10) continue;
-        if (seenTexts.has(text)) continue;
+        if (!text || text.length < 10 || seenTexts.has(text)) continue;
         seenTexts.add(text);
 
-        const role =
-          card.querySelector("[class*='review-card_reviewerRole']")?.textContent?.trim() || "";
-        const industry =
-          card.querySelector("[class*='review-card_reviewerIndustry']")?.textContent?.trim() || "";
-
-        // Review cards don't have explicit favorable/critical labels.
-        // Use rating to infer: >= 4.0 = like, < 4.0 = dislike
-        const ratingText =
-          card.querySelector("[class*='review-card_ratingRow']")?.textContent?.trim() || "";
+        const ratingText = card.querySelector("[class*='review-card_ratingRow']")?.textContent?.trim() || "";
         const ratingMatch = ratingText.match(/^(\d+(?:\.\d+)?)/);
         const rating = ratingMatch ? parseFloat(ratingMatch[1]) : null;
-        const type: "like" | "dislike" =
-          rating !== null && rating < 4.0 ? "dislike" : "like";
 
         results.push({
-          type,
+          type: rating !== null && rating < 4.0 ? "dislike" : "like",
           text,
           reviewUrl: baseUrl,
-          reviewerRole: role,
-          reviewerIndustry: industry,
+          reviewerRole: card.querySelector("[class*='review-card_reviewerRole']")?.textContent?.trim() || "",
+          reviewerIndustry: card.querySelector("[class*='review-card_reviewerIndustry']")?.textContent?.trim() || "",
         });
       }
 
@@ -294,44 +361,23 @@ export async function scrapeGartnerInsights(
     if (domInsights.length > 0) {
       const likes = domInsights.filter((r) => r.type === "like").length;
       const dislikes = domInsights.filter((r) => r.type === "dislike").length;
-      console.log(`[Gartner] Extracted ${likes} likes, ${dislikes} dislikes from DOM`);
+      console.log(`[Gartner:pw] Extracted ${likes} likes, ${dislikes} dislikes from DOM`);
       return domInsights;
     }
 
-    console.warn("[Gartner] Could not extract insights from page");
+    console.warn("[Gartner:pw] Could not extract insights from page");
     return [];
   } catch (e) {
-    console.error("[Gartner] Playwright scrape failed:", e instanceof Error ? e.message : e);
+    console.error("[Gartner:pw] Failed:", e instanceof Error ? e.message : e);
     return [];
   } finally {
     await browser.close();
   }
 }
 
-/** Extract insights from __NEXT_DATA__ vendor-snippets (best data source). */
-function extractFromNextData(
-  snippets: {
-    favorable?: Array<{
-      reviewId: number;
-      jobTitle?: string;
-      function?: string;
-      answers?: {
-        "lessonslearned-like-most"?: string;
-        "lessonslearned-dislike-most"?: string;
-      };
-    }>;
-    critical?: Array<{
-      reviewId: number;
-      jobTitle?: string;
-      function?: string;
-      answers?: {
-        "lessonslearned-like-most"?: string;
-        "lessonslearned-dislike-most"?: string;
-      };
-    }>;
-  },
-  gartnerUrl: string
-): GartnerInsight[] {
+// ── Shared: extract insights from vendor-snippets ───────────────────────────
+
+function extractFromNextData(snippets: VendorSnippets, gartnerUrl: string): GartnerInsight[] {
   const results: GartnerInsight[] = [];
 
   for (const review of (snippets.favorable ?? []).slice(0, 5)) {
