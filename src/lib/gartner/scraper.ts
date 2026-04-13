@@ -336,6 +336,22 @@ async function scrapeViaPlaywright(gartnerUrl: string): Promise<GartnerInsight[]
         });
       }
 
+      // Likes & Dislikes panel (two-column layout with aria-label="Likes"/"Dislikes")
+      // This is a separate section from the review cards, with its own DOM structure.
+      const ldColumns = document.querySelectorAll("[class*='likes-dislike-panel_column']");
+      for (const col of ldColumns) {
+        const ariaLabel = col.getAttribute("aria-label")?.toLowerCase() || "";
+        const type: "like" | "dislike" = ariaLabel.includes("dislike") ? "dislike" : "like";
+
+        const items = col.querySelectorAll("[class*='likes-dislike-panel_itemContent']");
+        for (const item of items) {
+          const text = item.textContent?.trim() || "";
+          if (!text || text.length < 5 || seenTexts.has(text)) continue;
+          seenTexts.add(text);
+          results.push({ type, text, reviewUrl: baseUrl, reviewerRole: "", reviewerIndustry: "" });
+        }
+      }
+
       // Review cards (real summary text)
       const reviewCards = document.querySelectorAll("[class*='review-card_reviewCard']");
       for (const card of reviewCards) {
