@@ -8,12 +8,12 @@ import { eq, and, lt } from "drizzle-orm";
 let isRunning = false;
 
 export async function POST(req: NextRequest) {
-  // Clean up any "running" records older than 30 minutes (server restart / crash)
-  const thirtyMinutesAgo = new Date(Date.now() - 30 * 60 * 1000).toISOString();
+  // Clean up any "running" records older than 15 minutes (server restart / crash / hung Playwright)
+  const fifteenMinutesAgo = new Date(Date.now() - 15 * 60 * 1000).toISOString();
   await db
     .update(scrapeRuns)
     .set({ status: "failed", completedAt: new Date().toISOString(), errorMessage: "Interrupted (server restart)" })
-    .where(and(eq(scrapeRuns.status, "running"), lt(scrapeRuns.startedAt, thirtyMinutesAgo)));
+    .where(and(eq(scrapeRuns.status, "running"), lt(scrapeRuns.startedAt, fifteenMinutesAgo)));
 
   if (isRunning) {
     return NextResponse.json(

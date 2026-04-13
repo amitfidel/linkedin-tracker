@@ -21,8 +21,9 @@ const FETCH_HEADERS = {
 /** Returns null on Railway (no Chrome available). */
 async function launchBrowser() {
   // On Railway / production, skip browser launch entirely — no Chrome available.
-  // Set GARTNER_LOCAL=1 in .env to enable Playwright-based scraping locally.
-  if (!process.env.GARTNER_LOCAL && process.env.RAILWAY_ENVIRONMENT) {
+  // Railway sets RAILWAY_ENVIRONMENT_NAME, RAILWAY_PROJECT_ID, etc.
+  const isRailway = !!(process.env.RAILWAY_ENVIRONMENT_NAME || process.env.RAILWAY_PROJECT_ID || process.env.RAILWAY_SERVICE_ID);
+  if (isRailway) {
     return null;
   }
 
