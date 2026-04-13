@@ -194,9 +194,16 @@ export function Header() {
                 <Play className="mr-2 h-4 w-4" />
                 Full scrape (LinkedIn + Gartner)
               </DropdownMenuItem>
-              <DropdownMenuItem onClick={() => handleScrape("gartner")}>
+              <DropdownMenuItem
+                onClick={() => {
+                  toast.info(
+                    "Run locally: npx tsx scripts/run-gartner-local.ts",
+                    { description: "Gartner scrape uses your local Chrome browser, then pushes results here.", duration: 8000 }
+                  );
+                }}
+              >
                 <Star className="mr-2 h-4 w-4" />
-                Gartner only (free)
+                Gartner only (local)
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
