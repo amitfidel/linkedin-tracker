@@ -1,0 +1,27 @@
+name: Weekly Scrape
+
+# Mondays at 2:00 UTC. Adjust to match your timezone in scheduleConfig if needed.
+# Free GitHub Actions cron can drift up to ~15 min; fine for a weekly job.
+on:
+  schedule:
+    - cron: "0 2 * * 1"
+  workflow_dispatch: {} # allow manual trigger from the Actions tab
+
+jobs:
+  trigger:
+    runs-on: ubuntu-latest
+    steps:
+      - name: POST /api/scrape/cron
+        run: |
+          set -eo pipefail
+          response=$(curl -sS -w "\n%{http_code}" \
+            -X POST "${{ secrets.RAILWAY_APP_URL }}/api/scrape/cron" \
+            -H "Authorization: Bearer ${{ secrets.SCRAPE_CRON_SECRET }}" \
+            -H "Content-Type: application/json")
+          body=$(echo "$response" | head -n -1)
+          code=$(echo "$response" | tail -n 1)
+          echo "HTTP $code"
+          echo "$body"
+          if [ "$code" != "200" ] && [ "$code" != "409" ]; then
+            exit 1
+          fi

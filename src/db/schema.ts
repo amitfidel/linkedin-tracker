@@ -127,6 +127,7 @@ export const scrapeRuns = sqliteTable(
     apifyRunIds: text("apify_run_ids"), // JSON array
     creditsUsed: real("credits_used"),
     stepErrors: text("step_errors"),          // JSON array of per-step error messages
+    errorsAcknowledgedAt: text("errors_acknowledged_at"), // when user dismissed the error badge
     aiSummary: text("ai_summary"),            // AI-generated weekly summary text
     aiSummaryGeneratedAt: text("ai_summary_generated_at"),
   },

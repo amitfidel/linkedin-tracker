@@ -12,6 +12,13 @@ import type {
   RawJobData,
   RawPersonData,
 } from "./types";
+import { runPool } from "@/lib/utils/pool";
+
+// Apify free tier allows 5 concurrent actor runs — stay at 3 to leave headroom.
+const APIFY_MAX_CONCURRENCY = Math.max(
+  1,
+  parseInt(process.env.APIFY_MAX_CONCURRENCY ?? "3", 10) || 3
+);
 
 export interface ScrapeResult<T> {
   data: T[];
@@ -56,16 +63,17 @@ export async function scrapePosts(
 /**
  * Fetch job listings for each company separately.
  * Jobs mode requires a keyword searchQuery — one run per company.
+ * Runs up to APIFY_MAX_CONCURRENCY actor runs in parallel (default: 3).
  * Returns a merged array of all job results tagged with their company name.
  */
-export async function scrapeJobs(companies: Array<{ name: string }>): Promise<ScrapeResult<RawJobData>> {
+export async function scrapeJobs(
+  companies: Array<{ name: string }>
+): Promise<ScrapeResult<RawJobData> & { perCompanyErrors: string[] }> {
   const client = getApifyClient();
-  const allItems: RawJobData[] = [];
-  const runIds: string[] = [];
-  let totalCredits = 0;
 
-  for (const company of companies) {
-    try {
+  const results = await runPool(
+    companies,
+    async (company) => {
       const run = await client.actor(LINKEDIN_SCRAPER_ACTOR).call(
         buildJobsInput(company.name),
         { waitSecs: 120, memory: 256 }
@@ -80,12 +88,31 @@ export async function scrapeJobs(companies: Array<{ name: string }>): Promise<Sc
         return jobCompany.includes(normalized) || normalized.includes(jobCompany);
       });
 
-      allItems.push(...matched);
-      runIds.push(run.id);
-      totalCredits += runInfo?.usageTotalUsd ?? 0;
-    } catch (err) {
-      // Log per-company failures but continue with the rest
-      console.error(`Jobs scrape failed for ${company.name}:`, err instanceof Error ? err.message : err);
+      return {
+        items: matched,
+        runId: run.id,
+        credits: runInfo?.usageTotalUsd ?? 0,
+      };
+    },
+    APIFY_MAX_CONCURRENCY
+  );
+
+  const allItems: RawJobData[] = [];
+  const runIds: string[] = [];
+  let totalCredits = 0;
+  const perCompanyErrors: string[] = [];
+
+  for (let i = 0; i < results.length; i++) {
+    const r = results[i];
+    const name = companies[i].name;
+    if (r.status === "fulfilled") {
+      allItems.push(...r.value.items);
+      runIds.push(r.value.runId);
+      totalCredits += r.value.credits;
+    } else {
+      const msg = `Jobs scrape failed for ${name}: ${r.reason instanceof Error ? r.reason.message : String(r.reason)}`;
+      console.error(msg);
+      perCompanyErrors.push(msg);
     }
   }
 
@@ -93,6 +120,7 @@ export async function scrapeJobs(companies: Array<{ name: string }>): Promise<Sc
     data: allItems,
     runId: runIds.join(","),
     creditsUsed: totalCredits,
+    perCompanyErrors,
   };
 }
 

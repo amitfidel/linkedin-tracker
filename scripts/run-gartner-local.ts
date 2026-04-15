@@ -10,9 +10,16 @@ import "dotenv/config";
 import { db } from "../src/db";
 import { companies } from "../src/db/schema";
 import { scrapeGartnerInsights } from "../src/lib/gartner/scraper";
+import { runPool } from "../src/lib/utils/pool";
 
 const RAILWAY_URL =
   process.argv[2] || "https://linkedin-tracker-production-4f02.up.railway.app";
+
+// Playwright is memory-heavy (~400 MB per browser). Concurrency 2 is safe on most machines.
+const GARTNER_CONCURRENCY = Math.max(
+  1,
+  parseInt(process.env.GARTNER_CONCURRENCY ?? "2", 10) || 2
+);
 
 async function main() {
   // Get companies with Gartner URLs from production DB
@@ -35,7 +42,19 @@ async function main() {
     return;
   }
 
-  // Scrape all companies locally
+  // Scrape all companies locally (parallel, bounded concurrency)
+  console.log(`\nScraping with concurrency=${GARTNER_CONCURRENCY}...`);
+  const results = await runPool(
+    gartnerCompanies,
+    async (company) => {
+      console.log(`[start] ${company.name}`);
+      const insights = await scrapeGartnerInsights(company.gartnerUrl!);
+      console.log(`[done]  ${company.name} — ${insights.length} insights`);
+      return { companyId: company.id, insights };
+    },
+    GARTNER_CONCURRENCY
+  );
+
   const allInsights: Array<{
     companyId: number;
     type: "like" | "dislike";
@@ -45,14 +64,13 @@ async function main() {
     reviewerIndustry: string;
   }> = [];
 
-  for (const company of gartnerCompanies) {
-    console.log(`\n=== Scraping ${company.name} ===`);
-    try {
-      const insights = await scrapeGartnerInsights(company.gartnerUrl!);
-      console.log(`Got ${insights.length} insights`);
-      for (const i of insights) {
+  for (let idx = 0; idx < results.length; idx++) {
+    const r = results[idx];
+    const name = gartnerCompanies[idx].name;
+    if (r.status === "fulfilled") {
+      for (const i of r.value.insights) {
         allInsights.push({
-          companyId: company.id,
+          companyId: r.value.companyId,
           type: i.type,
           text: i.text,
           reviewUrl: i.reviewUrl,
@@ -60,10 +78,10 @@ async function main() {
           reviewerIndustry: i.reviewerIndustry ?? "",
         });
       }
-    } catch (e) {
+    } else {
       console.error(
-        `Failed for ${company.name}:`,
-        e instanceof Error ? e.message : e
+        `Failed for ${name}:`,
+        r.reason instanceof Error ? r.reason.message : r.reason
       );
     }
   }

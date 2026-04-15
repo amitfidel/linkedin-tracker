@@ -152,6 +152,20 @@ export default function SettingsPage() {
             Scrape Schedule
           </h3>
 
+          <div className="rounded-md border border-blue-200 bg-blue-50 dark:border-blue-900 dark:bg-blue-950/30 p-3 text-xs">
+            <p className="font-medium text-blue-900 dark:text-blue-200">Managed by GitHub Actions</p>
+            <p className="text-blue-800 dark:text-blue-300 mt-1">
+              The weekly trigger is fired by{" "}
+              <code className="bg-blue-100 dark:bg-blue-900 px-1 rounded">.github/workflows/weekly-scrape.yml</code>.
+              Changing the cron here only toggles the enabled flag — the actual schedule lives in the workflow file.
+            </p>
+            {schedule?.lastRunAt && (
+              <p className="text-blue-800 dark:text-blue-300 mt-1">
+                Last scheduled run: {new Date(schedule.lastRunAt).toLocaleString()}
+              </p>
+            )}
+          </div>
+
           <div className="flex items-center justify-between">
             <Label>Auto-scrape enabled</Label>
             <Switch checked={isEnabled} onCheckedChange={setIsEnabled} />

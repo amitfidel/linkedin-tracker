@@ -10,8 +10,9 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { Sun, Moon, Play, Loader2, CheckCircle2, XCircle, AlertTriangle, ChevronDown, Star, Database } from "lucide-react";
+import { Sun, Moon, Play, Loader2, CheckCircle2, XCircle, AlertTriangle, ChevronDown, Star } from "lucide-react";
 import { toast } from "sonner";
+import { ErrorBadge } from "./error-badge";
 
 interface ScrapeRun {
   id: number;
@@ -21,6 +22,7 @@ interface ScrapeRun {
   companiesCount: number | null;
   creditsUsed: number | null;
   stepErrors: string | null;
+  errorsAcknowledgedAt: string | null;
 }
 
 type ScrapePhase = "idle" | "starting" | "running" | "done_ok" | "done_warn" | "done_err";
@@ -48,8 +50,26 @@ export function Header() {
   const { theme, setTheme } = useTheme();
   const [phase, setPhase] = useState<ScrapePhase>("idle");
   const [activeRun, setActiveRun] = useState<ScrapeRun | null>(null);
+  const [latestRun, setLatestRun] = useState<ScrapeRun | null>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const elapsed = useElapsedSeconds(phase === "running" ? (activeRun?.startedAt ?? null) : null);
+
+  // Fetch latest run on mount so ErrorBadge can show un-acknowledged errors
+  useEffect(() => {
+    fetch("/api/scrape/status")
+      .then((r) => (r.ok ? r.json() : []))
+      .then((runs: ScrapeRun[]) => {
+        if (runs[0]) setLatestRun(runs[0]);
+        // If latest is still "running", resume polling
+        if (runs[0]?.status === "running") {
+          setActiveRun(runs[0]);
+          setPhase("running");
+          startPolling();
+        }
+      })
+      .catch(() => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // ── Poll the status endpoint ───────────────────────────────────────────────
   async function pollStatus() {
@@ -62,9 +82,11 @@ export function Header() {
 
       if (latest.status === "running") {
         setActiveRun(latest);
+        setLatestRun(latest);
         setPhase("running");
       } else if (latest.status === "completed" || latest.status === "failed") {
         setActiveRun(latest);
+        setLatestRun(latest);
         stopPolling();
 
         const errors: string[] = latest.stepErrors ? JSON.parse(latest.stepErrors) : [];
@@ -77,7 +99,7 @@ export function Header() {
           )}`);
         } else if (errors.length > 0) {
           setPhase("done_warn");
-          toast.warning(`Scrape completed with ${errors.length} warning(s). Check Settings for details.`);
+          toast.warning(`Scrape completed with ${errors.length} warning(s). Click the badge in the header to see details.`);
         } else {
           setPhase("done_ok");
           toast.success(
@@ -144,6 +166,22 @@ export function Header() {
     }
   }
 
+  // ── Unacknowledged step errors from the latest run ───────────────────────
+  const unacknowledgedErrors: string[] =
+    latestRun &&
+    !latestRun.errorsAcknowledgedAt &&
+    latestRun.stepErrors &&
+    (latestRun.status === "completed" || latestRun.status === "failed")
+      ? (() => {
+          try {
+            const parsed = JSON.parse(latestRun.stepErrors);
+            return Array.isArray(parsed) ? parsed : [];
+          } catch {
+            return [];
+          }
+        })()
+      : [];
+
   // ── Button appearance ──────────────────────────────────────────────────────
   const isDisabled = phase === "starting" || phase === "running";
 
@@ -172,6 +210,17 @@ export function Header() {
         </h2>
       </div>
       <div className="flex items-center gap-3">
+        {unacknowledgedErrors.length > 0 && latestRun && (
+          <ErrorBadge
+            runId={latestRun.id}
+            errors={unacknowledgedErrors}
+            onAcknowledged={() =>
+              setLatestRun((prev) =>
+                prev ? { ...prev, errorsAcknowledgedAt: new Date().toISOString() } : prev
+              )
+            }
+          />
+        )}
         <div className="flex items-center">
           <Button
             variant="outline"

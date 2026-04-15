@@ -181,6 +181,10 @@ export async function runPipeline(triggerType: "manual" | "scheduled") {
       // runId may be comma-separated when multiple company runs happened
       if (jobsResult.runId) apifyRunIds.push(...jobsResult.runId.split(",").filter(Boolean));
       totalCredits += jobsResult.creditsUsed;
+      // Surface per-company failures as step errors so they show in the UI badge
+      if (jobsResult.perCompanyErrors.length > 0) {
+        stepErrors.push(...jobsResult.perCompanyErrors);
+      }
 
       const seenJobIds = new Map<number, Set<string>>();
 
