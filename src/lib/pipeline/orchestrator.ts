@@ -24,6 +24,7 @@ import {
 import { detectPersonnelChanges } from "./diff-detector";
 import { generateAISummary } from "../analysis/ai-summarizer";
 import { scrapeGartnerInsights, discoverGartnerUrl } from "../gartner/scraper";
+import { sendWeeklyDigest } from "../email/weekly-digest";
 
 async function sha256(text: string): Promise<string> {
   const crypto = await import("crypto");
@@ -388,10 +389,26 @@ export async function runPipeline(triggerType: "manual" | "scheduled") {
       .where(eq(scrapeRuns.id, runId));
 
     // ── Auto-generate AI summary (non-blocking — failure doesn't affect status) ─
+    let summaryMarkdown: string | null = null;
     try {
-      await generateAISummary(true); // force-refresh so summary reflects latest data
+      summaryMarkdown = await generateAISummary(true); // force-refresh so summary reflects latest data
     } catch (e) {
       console.warn("AI summary generation failed (non-critical):", e instanceof Error ? e.message : e);
+    }
+
+    // ── Weekly digest email (scheduled runs only, non-blocking) ───────────────
+    if (triggerType === "scheduled" && summaryMarkdown) {
+      try {
+        await sendWeeklyDigest({
+          summaryMarkdown,
+          companiesCount: activeCompanies.length,
+          creditsUsed: totalCredits,
+          runId,
+          stepErrors,
+        });
+      } catch (e) {
+        console.warn("Weekly digest email failed (non-critical):", e instanceof Error ? e.message : e);
+      }
     }
 
     return {
