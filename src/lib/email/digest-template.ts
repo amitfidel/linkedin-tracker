@@ -1,8 +1,8 @@
 /**
  * Renders the weekly digest email as email-safe HTML (table-based layout,
  * inline styles, web-safe font stacks). Based on the V2 "Dispatch" design —
- * oversized serif masthead, hero material-events number, stat rule, sections
- * with per-item tag/company/headline, CTA, footer.
+ * oversized serif masthead, hero material-events number + headline, lede,
+ * sections with per-item tag/company/headline/take, pull quote, CTA, footer.
  */
 
 // ── Design tokens (match V2 in the design file) ──────────────────────────────
@@ -35,6 +35,7 @@ export interface DigestSectionItem {
   tag: string;
   company: string;
   headline: string;
+  take?: string; // "Why it matters" opinionated one-liner
 }
 
 export interface DigestSection {
@@ -47,6 +48,9 @@ export interface DigestSection {
 export interface DigestData {
   date: string; // "Mon, Apr 20, 2026"
   issue: number;
+  headline?: { main: string; sub: string };
+  lede?: string;
+  pullQuote?: { text: string; attribution: string };
   summary: {
     totalCompanies: number;
     companiesWithActivity: number;
@@ -78,46 +82,107 @@ function pad2(n: number): string {
   return String(n).padStart(2, "0");
 }
 
-// ── Markdown parser — extracts sections the template expects ─────────────────
+// ── Markdown parser ──────────────────────────────────────────────────────────
 /**
- * Parses the Gemini weekly-digest markdown into structured sections.
+ * Parses the Gemini weekly-digest markdown into:
+ *   - headline { main, sub }     (from `# HEADLINE` / `# SUBHEAD` blocks)
+ *   - lede string                (from `# LEDE` block)
+ *   - pullQuote { text, attribution } (from `# PULL_QUOTE` / `# ATTRIBUTION`)
+ *   - sections with per-item take (from `## heading` + bullets + _Why it matters: …_ line)
  *
- * Expects headings like:
- *   ## 🤝 Partnerships & Integrations
- *   - **Armis** is actively building...
- *
- * Returns an empty array for the "No new Gartner insights" or "No significant
- * events" fallback strings.
+ * Backward-compatible with the older format (plain ## sections + **Company** bullets).
  */
-export function parseDigestMarkdown(md: string): DigestSection[] {
-  if (!md || /no significant events/i.test(md.split("\n")[0])) return [];
+export interface ParsedDigest {
+  headline?: { main: string; sub: string };
+  lede?: string;
+  pullQuote?: { text: string; attribution: string };
+  sections: DigestSection[];
+}
+
+export function parseDigestMarkdown(md: string): ParsedDigest {
+  if (!md || /no significant events/i.test(md.split("\n")[0])) {
+    return { sections: [] };
+  }
 
   const lines = md.split(/\r?\n/);
+  const meta: Record<string, string> = {};
   const sections: DigestSection[] = [];
   let num = 0;
-  let current: DigestSection | null = null;
+  let currentSection: DigestSection | null = null;
+  let currentMeta: string | null = null;
+  let metaBuffer: string[] = [];
+  let lastItem: DigestSectionItem | null = null;
+
+  const flushMeta = () => {
+    if (currentMeta) {
+      meta[currentMeta] = metaBuffer.join(" ").replace(/\s+/g, " ").trim();
+      currentMeta = null;
+      metaBuffer = [];
+    }
+  };
+
+  const META_KEYS = new Set([
+    "HEADLINE",
+    "SUBHEAD",
+    "LEDE",
+    "PULL_QUOTE",
+    "ATTRIBUTION",
+  ]);
 
   for (const rawLine of lines) {
     const line = rawLine.trimEnd();
+
+    // "LABEL: value" — single-line meta block (preferred, robust format)
+    const labelColon = /^([A-Z][A-Z_ ]{2,})\s*:\s*(.*)$/.exec(line);
+    if (labelColon) {
+      const key = labelColon[1].trim().toUpperCase().replace(/\s+/g, "_");
+      if (META_KEYS.has(key)) {
+        flushMeta();
+        if (currentSection && currentSection.items.length > 0) {
+          sections.push(currentSection);
+          currentSection = null;
+        }
+        currentMeta = key;
+        lastItem = null;
+        const value = labelColon[2].trim();
+        if (value) metaBuffer.push(value);
+        continue;
+      }
+    }
+
+    // "# META_NAME" on a line by itself — legacy/tolerant format (pre-prompt-tighten)
+    const h1 = /^#\s+([A-Z_ ]+)$/.exec(line);
+    if (h1) {
+      const key = h1[1].trim().toUpperCase().replace(/\s+/g, "_");
+      if (META_KEYS.has(key)) {
+        flushMeta();
+        if (currentSection && currentSection.items.length > 0) {
+          sections.push(currentSection);
+          currentSection = null;
+        }
+        currentMeta = key;
+        lastItem = null;
+        continue;
+      }
+    }
+
+    // ## Section
     const h2 = /^##\s+(.+)$/.exec(line);
     if (h2) {
-      if (current && current.items.length > 0) sections.push(current);
+      flushMeta();
+      if (currentSection && currentSection.items.length > 0) sections.push(currentSection);
       num++;
-      // Strip leading emoji/symbol + whitespace from heading ("🤝 Partnerships" → "Partnerships")
-      const label = h2[1].replace(/^[\p{Emoji}\p{S}\p{P}\s]+/u, "").trim() || h2[1].trim();
-      current = {
-        num,
-        label,
-        title: label,
-        items: [],
-      };
+      const label =
+        h2[1].replace(/^[\p{Emoji}\p{S}\p{P}\s]+/u, "").trim() || h2[1].trim();
+      currentSection = { num, label, title: label, items: [] };
+      lastItem = null;
       continue;
     }
-    if (!current) continue;
 
+    // Bullet — always starts a new item under the current section
     const bullet = /^-\s+(.+)$/.exec(line);
-    if (bullet) {
-      const text = bullet[1];
+    if (bullet && currentSection) {
+      const text = bullet[1].trim();
       const bold = /^\*\*([^*]+)\*\*\s*(.*)$/.exec(text);
       let company = "";
       let headline = text;
@@ -125,15 +190,86 @@ export function parseDigestMarkdown(md: string): DigestSection[] {
         company = bold[1].trim();
         headline = bold[2].replace(/^[\s—–-]+/, "").trim();
       }
-      const prefix = CATEGORY_TAGS[inferCategoryKey(current.label)] ?? "§";
-      const tag = `${prefix}-${pad2(current.items.length + 1)}`;
-      current.items.push({ tag, company, headline });
+      const prefix = CATEGORY_TAGS[inferCategoryKey(currentSection.label)] ?? "§";
+      const tag = `${prefix}-${pad2(currentSection.items.length + 1)}`;
+      lastItem = { tag, company, headline };
+      currentSection.items.push(lastItem);
+      continue;
+    }
+
+    // _Why it matters: ..._ subline attached to the last bullet in the section
+    const take = /^\s*_?[Ww]hy it matters[:：]\s*(.*?)_?\s*$/.exec(line);
+    if (take && lastItem) {
+      const cleaned = take[1].replace(/_+$/g, "").trim();
+      if (cleaned) lastItem.take = cleaned;
+      continue;
+    }
+
+    // Inside a meta block — accumulate
+    if (currentMeta && line) {
+      metaBuffer.push(line.replace(/^\s+|\s+$/g, ""));
+      continue;
     }
   }
-  if (current && current.items.length > 0) sections.push(current);
+
+  flushMeta();
+  if (currentSection && currentSection.items.length > 0) sections.push(currentSection);
 
   // Renumber in case we dropped empty sections
-  return sections.map((s, i) => ({ ...s, num: i + 1 }));
+  const renumbered = sections.map((s, i) => ({ ...s, num: i + 1 }));
+
+  // Tolerant fallback: some models strip HEADLINE:/SUBHEAD:/LEDE: prefixes at
+  // the very top. If they did, extract from unlabeled prefix paragraphs
+  // (the text that appears before the first `## Section`).
+  if (!meta.HEADLINE || !meta.SUBHEAD || !meta.LEDE) {
+    const firstSectionIdx = lines.findIndex((l) => /^##\s+/.test(l.trim()));
+    const preamble = firstSectionIdx === -1 ? lines : lines.slice(0, firstSectionIdx);
+    const paragraphs: string[] = [];
+    let buf: string[] = [];
+    for (const raw of preamble) {
+      const l = raw.trim();
+      // Skip already-labeled lines to avoid double-counting
+      if (/^([A-Z][A-Z_ ]{2,}):/.test(l) || /^#\s+[A-Z_]+$/.test(l)) {
+        if (buf.length) {
+          paragraphs.push(buf.join(" ").trim());
+          buf = [];
+        }
+        continue;
+      }
+      if (!l) {
+        if (buf.length) {
+          paragraphs.push(buf.join(" ").trim());
+          buf = [];
+        }
+      } else {
+        buf.push(l.replace(/^#+\s*/, "")); // strip markdown H1/H2 prefixes
+      }
+    }
+    if (buf.length) paragraphs.push(buf.join(" ").trim());
+    const nonEmpty = paragraphs.filter(Boolean);
+    if (!meta.HEADLINE && nonEmpty[0]) meta.HEADLINE = nonEmpty[0].replace(/\.$/, "");
+    if (!meta.SUBHEAD && nonEmpty[1]) meta.SUBHEAD = nonEmpty[1];
+    if (!meta.LEDE && nonEmpty[2]) meta.LEDE = nonEmpty.slice(2).join(" ");
+  }
+
+  const headline =
+    meta.HEADLINE && meta.SUBHEAD
+      ? { main: meta.HEADLINE, sub: meta.SUBHEAD }
+      : undefined;
+  const pullQuote =
+    meta.PULL_QUOTE
+      ? {
+          text: meta.PULL_QUOTE.replace(/^["']|["']$/g, ""),
+          attribution: meta.ATTRIBUTION ?? "",
+        }
+      : undefined;
+
+  return {
+    headline,
+    lede: meta.LEDE || undefined,
+    pullQuote,
+    sections: renumbered,
+  };
 }
 
 function inferCategoryKey(label: string): string {
@@ -149,11 +285,11 @@ function inferCategoryKey(label: string): string {
 
 // ── Render ───────────────────────────────────────────────────────────────────
 export function renderDigestHtml(d: DigestData): string {
-  const { summary, sections, meta, appUrl, stepErrors } = d;
+  const { summary, sections, meta, appUrl, stepErrors, headline, lede, pullQuote } = d;
 
-  // Subject info (in preheader)
   const preheader = `${summary.interestingPostsCount} material events across ${summary.companiesWithActivity}/${summary.totalCompanies} vendors · ${summary.totalPostsThisWeek} posts · ${summary.totalActiveJobs} open jobs.`;
 
+  // ── Stat rule cells ───────────────────────────────────────────────────────
   const statItems = [
     { label: "Tracked", value: summary.totalCompanies, delta: "" },
     {
@@ -165,7 +301,6 @@ export function renderDigestHtml(d: DigestData): string {
     { label: "Interesting", value: summary.interestingPostsCount, delta: "" },
     { label: "Open jobs", value: summary.totalActiveJobs, delta: "" },
   ];
-
   const statCells = statItems
     .map((it, i) => {
       const valueHtml = `<span style="font-family:${SERIF};font-size:24px;font-weight:500;color:${INK_LOUD};letter-spacing:-0.6px;">${escape(
@@ -186,29 +321,61 @@ export function renderDigestHtml(d: DigestData): string {
     })
     .join("");
 
+  // ── Hero right column: headline (main + sub) or fallback ──────────────────
+  const heroRightHtml = headline
+    ? `<div style="font-family:${MONO};font-size:10px;letter-spacing:2px;color:${INK_DIM};text-transform:uppercase;margin-bottom:12px;">The week's headline</div>
+       <div style="font-family:${SERIF};font-size:28px;line-height:1.18;color:${INK_LOUD};letter-spacing:-0.6px;font-weight:500;">${escape(
+         headline.main,
+       )}</div>
+       <div style="font-family:${SERIF};font-size:16px;line-height:1.5;color:${INK_MUTED};margin-top:12px;font-style:italic;">${escape(
+         headline.sub,
+       )}</div>`
+    : `<div style="font-family:${MONO};font-size:10px;letter-spacing:2px;color:${INK_DIM};text-transform:uppercase;margin-bottom:12px;">The week in one number</div>
+       <div style="font-family:${SERIF};font-size:22px;line-height:1.3;color:${INK_LOUD};letter-spacing:-0.4px;font-weight:500;">Partnerships, launches, funding, research, and recognition — <span style="font-style:italic;color:${INK_MUTED};">no marketing fluff.</span></div>`;
+
+  // ── Lede block ────────────────────────────────────────────────────────────
+  const ledeHtml = lede
+    ? `<tr><td style="padding:44px 48px 8px;">
+        <div style="font-family:${MONO};font-size:10px;letter-spacing:2px;color:${ACCENT};text-transform:uppercase;margin-bottom:14px;font-weight:600;">The Lede</div>
+        <div style="font-family:${SERIF};font-size:20px;line-height:1.5;color:${INK_LOUD};letter-spacing:-0.2px;max-width:560px;">${escape(
+          lede,
+        )}</div>
+      </td></tr>`
+    : "";
+
+  // ── Sections ──────────────────────────────────────────────────────────────
   const sectionsHtml = sections.length
     ? sections
         .map((s) => {
           const itemsHtml = s.items
             .map((item, i) => {
               const borderTop = i === 0 ? "none" : `1px solid ${HAIR}`;
-              const companyRow = `<tr>
-                <td style="padding:0 0 6px 0;font-family:${MONO};font-size:10px;letter-spacing:1.6px;color:${INK_DIM};text-transform:uppercase;width:78px;vertical-align:top;">${escape(
-                  item.tag,
-                )}</td>
-                <td style="padding:0 0 6px 0;font-family:${SANS};font-size:13px;font-weight:700;color:${ACCENT};letter-spacing:0.3px;text-transform:uppercase;vertical-align:top;">${escape(
-                  item.company || s.label,
-                )}</td>
-              </tr>`;
-              const headlineRow = `<tr>
-                <td></td>
-                <td style="font-family:${SERIF};font-size:17px;line-height:1.45;color:${INK};padding:0;">${escape(
-                  item.headline,
-                )}</td>
-              </tr>`;
+              const takeHtml = item.take
+                ? `<tr><td></td>
+                    <td style="padding:10px 0 0 0;">
+                      <div style="font-family:${SANS};font-size:13px;line-height:1.6;color:${INK_MUTED};border-left:2px solid ${ACCENT};padding:2px 0 2px 12px;">
+                        <span style="font-family:${MONO};font-size:9px;letter-spacing:1.6px;color:${ACCENT};text-transform:uppercase;margin-right:8px;font-weight:600;">Why it matters</span>${escape(
+                          item.take,
+                        )}
+                      </div>
+                    </td></tr>`
+                : "";
               return `<table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="border-top:${borderTop};margin:0;padding:20px 0;">
-                ${companyRow}
-                ${headlineRow}
+                <tr>
+                  <td style="padding:0 0 6px 0;font-family:${MONO};font-size:10px;letter-spacing:1.6px;color:${INK_DIM};text-transform:uppercase;width:78px;vertical-align:top;">${escape(
+                    item.tag,
+                  )}</td>
+                  <td style="padding:0 0 6px 0;font-family:${SANS};font-size:13px;font-weight:700;color:${ACCENT};letter-spacing:0.3px;text-transform:uppercase;vertical-align:top;">${escape(
+                    item.company || s.label,
+                  )}</td>
+                </tr>
+                <tr>
+                  <td></td>
+                  <td style="font-family:${SERIF};font-size:17px;line-height:1.45;color:${INK};padding:0;">${escape(
+                    item.headline,
+                  )}</td>
+                </tr>
+                ${takeHtml}
               </table>`;
             })
             .join("");
@@ -226,8 +393,24 @@ export function renderDigestHtml(d: DigestData): string {
         .join("")
     : `<tr><td style="padding:48px 0;text-align:center;font-family:${SERIF};font-size:18px;color:${INK_MUTED};font-style:italic;">No material events captured this week.</td></tr>`;
 
+  // ── Pull quote block ──────────────────────────────────────────────────────
+  const pullQuoteHtml = pullQuote
+    ? `<tr><td style="padding:40px 48px;">
+        <div style="border-top:2px solid ${ACCENT};border-bottom:2px solid ${ACCENT};padding:32px 0;">
+          <div style="font-family:${MONO};font-size:10px;letter-spacing:2.2px;color:${ACCENT};text-transform:uppercase;margin-bottom:16px;font-weight:600;">★ Quote of the week</div>
+          <div style="font-family:${SERIF};font-size:26px;line-height:1.3;font-style:italic;color:${INK_LOUD};letter-spacing:-0.4px;">&ldquo;${escape(
+            pullQuote.text,
+          )}&rdquo;</div>
+          ${pullQuote.attribution ? `<div style="font-family:${SANS};font-size:11px;color:${INK_MUTED};margin-top:14px;letter-spacing:0.4px;text-transform:uppercase;font-weight:600;">— ${escape(
+            pullQuote.attribution,
+          )}</div>` : ""}
+        </div>
+      </td></tr>`
+    : "";
+
+  // ── Step error block ──────────────────────────────────────────────────────
   const errorsHtml = stepErrors.length
-    ? `<tr><td style="padding:24px 0 0;">
+    ? `<tr><td style="padding:24px 48px 0;">
         <div style="border:1px solid #3a2a2a;border-radius:2px;padding:14px 18px;background:#171112;">
           <div style="font-family:${MONO};font-size:10px;letter-spacing:2px;color:#e36b6b;text-transform:uppercase;font-weight:600;margin-bottom:8px;">⚠ ${stepErrors.length} step warning${stepErrors.length > 1 ? "s" : ""}</div>
           <div style="font-family:${SANS};font-size:12px;line-height:1.6;color:${INK_MUTED};">
@@ -279,7 +462,7 @@ export function renderDigestHtml(d: DigestData): string {
   </div>
 </td></tr>
 
-<!-- Hero number -->
+<!-- Hero number + headline -->
 <tr><td style="padding:36px 48px 32px;border-bottom:1px solid ${HAIR};">
   <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%">
     <tr>
@@ -290,11 +473,7 @@ export function renderDigestHtml(d: DigestData): string {
       </td>
       <td width="1%" style="background:${HAIR};width:1px;">&nbsp;</td>
       <td valign="middle" style="padding-left:26px;">
-        <div style="font-family:${MONO};font-size:10px;letter-spacing:2px;color:${INK_DIM};text-transform:uppercase;margin-bottom:12px;">The week in one number</div>
-        <div style="font-family:${SERIF};font-size:24px;line-height:1.25;color:${INK_LOUD};letter-spacing:-0.4px;font-weight:500;">
-          Partnerships, launches, funding, research, and recognition —
-          <span style="font-style:italic;color:${INK_MUTED};">no marketing fluff.</span>
-        </div>
+        ${heroRightHtml}
       </td>
     </tr>
   </table>
@@ -307,13 +486,18 @@ export function renderDigestHtml(d: DigestData): string {
   </table>
 </td></tr>
 
+${ledeHtml}
+
 <!-- Sections -->
 <tr><td style="padding:16px 48px 32px;">
   <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%">
     ${sectionsHtml}
-    ${errorsHtml}
   </table>
 </td></tr>
+
+${pullQuoteHtml}
+
+${errorsHtml}
 
 <!-- CTA -->
 <tr><td style="padding:24px 48px 40px;border-top:1px solid ${HAIR};text-align:center;">
@@ -347,11 +531,16 @@ export function renderDigestHtml(d: DigestData): string {
 
 // ── Plain-text version (used as email fallback) ──────────────────────────────
 export function renderDigestText(d: DigestData): string {
-  const { summary, sections, meta, appUrl } = d;
+  const { summary, sections, meta, appUrl, headline, lede, pullQuote } = d;
   const lines: string[] = [];
   lines.push(`THE DISPATCH — ${d.date}`);
   lines.push(`Vol.1 · №${meta.runId}`);
   lines.push("");
+  if (headline) {
+    lines.push(headline.main.toUpperCase());
+    lines.push(headline.sub);
+    lines.push("");
+  }
   lines.push(
     `${summary.interestingPostsCount} material events across ${summary.companiesWithActivity}/${summary.totalCompanies} vendors.`,
   );
@@ -359,13 +548,23 @@ export function renderDigestText(d: DigestData): string {
     `${summary.totalPostsThisWeek} posts · ${summary.totalActiveJobs} open jobs.`,
   );
   lines.push("");
+  if (lede) {
+    lines.push(lede);
+    lines.push("");
+  }
   for (const s of sections) {
     lines.push(`§${pad2(s.num)} — ${s.label.toUpperCase()}`);
     for (const item of s.items) {
       lines.push(`  [${item.tag}] ${item.company}`);
       lines.push(`  ${item.headline}`);
+      if (item.take) lines.push(`    why it matters: ${item.take}`);
       lines.push("");
     }
+  }
+  if (pullQuote) {
+    lines.push(`"${pullQuote.text}"`);
+    if (pullQuote.attribution) lines.push(`— ${pullQuote.attribution}`);
+    lines.push("");
   }
   lines.push("---");
   lines.push(`Open dashboard: ${appUrl}`);

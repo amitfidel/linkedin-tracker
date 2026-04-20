@@ -51,12 +51,16 @@ export async function sendWeeklyDigest(input: WeeklyDigestInput): Promise<void> 
   // Pull real stats from the DB (totalCompanies, active, posts, interesting, jobs)
   const digest = await generateWeeklyDigest();
 
+  const parsed = parseDigestMarkdown(input.summaryMarkdown);
   const now = new Date();
   const data: DigestData = {
     date: formatDateHuman(now),
     issue: input.runId,
+    headline: parsed.headline,
+    lede: parsed.lede,
+    pullQuote: parsed.pullQuote,
     summary: digest.summary,
-    sections: parseDigestMarkdown(input.summaryMarkdown),
+    sections: parsed.sections,
     stepErrors: input.stepErrors,
     meta: {
       runId: input.runId,
