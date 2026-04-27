@@ -272,6 +272,31 @@ export function parseDigestMarkdown(md: string): ParsedDigest {
   };
 }
 
+// ── Per-company color palette ────────────────────────────────────────────────
+// Curated set that reads on dark BG, deterministically assigned via name hash.
+// Order is intentional — first companies in alphabetical order get the most
+// distinctive accents (lime, coral, sky) before cycling.
+const COMPANY_PALETTE = [
+  "#c8ff3f", // lime  (matches global accent — first company keeps continuity)
+  "#ff8a4c", // coral
+  "#7aa2ff", // sky
+  "#ff5ac8", // magenta
+  "#ffc857", // amber
+  "#5eead4", // mint
+  "#a78bfa", // lavender
+  "#ffaa6c", // peach
+];
+
+function colorForCompany(name: string): string {
+  if (!name) return ACCENT;
+  const key = name.trim().toLowerCase();
+  let h = 0;
+  for (let i = 0; i < key.length; i++) {
+    h = (h * 31 + key.charCodeAt(i)) >>> 0;
+  }
+  return COMPANY_PALETTE[h % COMPANY_PALETTE.length];
+}
+
 function inferCategoryKey(label: string): string {
   const l = label.toLowerCase();
   if (l.includes("partner")) return "partnership";
@@ -303,17 +328,17 @@ export function renderDigestHtml(d: DigestData): string {
   ];
   const statCells = statItems
     .map((it, i) => {
-      const valueHtml = `<span style="font-family:${SERIF};font-size:24px;font-weight:500;color:${INK_LOUD};letter-spacing:-0.6px;">${escape(
+      const valueHtml = `<span style="font-family:${SERIF};font-size:30px;font-weight:500;color:${INK_LOUD};letter-spacing:-0.7px;">${escape(
         it.value.toLocaleString(),
       )}</span>`;
       const deltaHtml = it.delta
-        ? `<span style="font-family:${MONO};font-size:11px;color:${INK_DIM};margin-left:6px;">${escape(
+        ? `<span style="font-family:${MONO};font-size:12px;color:${INK_DIM};margin-left:6px;">${escape(
             it.delta,
           )}</span>`
         : "";
       const borderLeft = i === 0 ? "none" : `1px solid ${HAIR}`;
-      return `<td style="padding:16px 14px;border-left:${borderLeft};vertical-align:top;" width="20%">
-        <div style="font-family:${MONO};font-size:9px;letter-spacing:1.4px;color:${INK_DIM};text-transform:uppercase;margin-bottom:6px;">${escape(
+      return `<td style="padding:18px 14px;border-left:${borderLeft};vertical-align:top;" width="20%">
+        <div style="font-family:${MONO};font-size:10px;letter-spacing:1.4px;color:${INK_DIM};text-transform:uppercase;margin-bottom:8px;">${escape(
           it.label,
         )}</div>
         <div>${valueHtml}${deltaHtml}</div>
@@ -323,21 +348,21 @@ export function renderDigestHtml(d: DigestData): string {
 
   // ── Hero right column: headline (main + sub) or fallback ──────────────────
   const heroRightHtml = headline
-    ? `<div style="font-family:${MONO};font-size:10px;letter-spacing:2px;color:${INK_DIM};text-transform:uppercase;margin-bottom:12px;">The week's headline</div>
-       <div style="font-family:${SERIF};font-size:28px;line-height:1.18;color:${INK_LOUD};letter-spacing:-0.6px;font-weight:500;">${escape(
+    ? `<div style="font-family:${MONO};font-size:11px;letter-spacing:2px;color:${INK_DIM};text-transform:uppercase;margin-bottom:14px;">The week's headline</div>
+       <div style="font-family:${SERIF};font-size:30px;line-height:1.2;color:${INK_LOUD};letter-spacing:-0.6px;font-weight:500;">${escape(
          headline.main,
        )}</div>
-       <div style="font-family:${SERIF};font-size:16px;line-height:1.5;color:${INK_MUTED};margin-top:12px;font-style:italic;">${escape(
+       <div style="font-family:${SERIF};font-size:18px;line-height:1.5;color:${INK_MUTED};margin-top:14px;font-style:italic;">${escape(
          headline.sub,
        )}</div>`
-    : `<div style="font-family:${MONO};font-size:10px;letter-spacing:2px;color:${INK_DIM};text-transform:uppercase;margin-bottom:12px;">The week in one number</div>
-       <div style="font-family:${SERIF};font-size:22px;line-height:1.3;color:${INK_LOUD};letter-spacing:-0.4px;font-weight:500;">Partnerships, launches, funding, research, and recognition — <span style="font-style:italic;color:${INK_MUTED};">no marketing fluff.</span></div>`;
+    : `<div style="font-family:${MONO};font-size:11px;letter-spacing:2px;color:${INK_DIM};text-transform:uppercase;margin-bottom:14px;">The week in one number</div>
+       <div style="font-family:${SERIF};font-size:24px;line-height:1.3;color:${INK_LOUD};letter-spacing:-0.4px;font-weight:500;">Partnerships, launches, funding, research, and recognition — <span style="font-style:italic;color:${INK_MUTED};">no marketing fluff.</span></div>`;
 
   // ── Lede block ────────────────────────────────────────────────────────────
   const ledeHtml = lede
-    ? `<tr><td style="padding:44px 48px 8px;">
-        <div style="font-family:${MONO};font-size:10px;letter-spacing:2px;color:${ACCENT};text-transform:uppercase;margin-bottom:14px;font-weight:600;">The Lede</div>
-        <div style="font-family:${SERIF};font-size:20px;line-height:1.5;color:${INK_LOUD};letter-spacing:-0.2px;max-width:560px;">${escape(
+    ? `<tr><td style="padding:48px 48px 8px;">
+        <div style="font-family:${MONO};font-size:11px;letter-spacing:2px;color:${ACCENT};text-transform:uppercase;margin-bottom:16px;font-weight:600;">The Lede</div>
+        <div style="font-family:${SERIF};font-size:22px;line-height:1.5;color:${INK_LOUD};letter-spacing:-0.2px;max-width:580px;">${escape(
           lede,
         )}</div>
       </td></tr>`
@@ -350,28 +375,29 @@ export function renderDigestHtml(d: DigestData): string {
           const itemsHtml = s.items
             .map((item, i) => {
               const borderTop = i === 0 ? "none" : `1px solid ${HAIR}`;
+              const companyColor = colorForCompany(item.company);
               const takeHtml = item.take
                 ? `<tr><td></td>
-                    <td style="padding:10px 0 0 0;">
-                      <div style="font-family:${SANS};font-size:13px;line-height:1.6;color:${INK_MUTED};border-left:2px solid ${ACCENT};padding:2px 0 2px 12px;">
-                        <span style="font-family:${MONO};font-size:9px;letter-spacing:1.6px;color:${ACCENT};text-transform:uppercase;margin-right:8px;font-weight:600;">Why it matters</span>${escape(
+                    <td style="padding:12px 0 0 0;">
+                      <div style="font-family:${SANS};font-size:15px;line-height:1.6;color:${INK_MUTED};border-left:3px solid ${companyColor};padding:4px 0 4px 14px;">
+                        <span style="font-family:${MONO};font-size:10px;letter-spacing:1.6px;color:${companyColor};text-transform:uppercase;margin-right:8px;font-weight:600;">Why it matters</span>${escape(
                           item.take,
                         )}
                       </div>
                     </td></tr>`
                 : "";
-              return `<table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="border-top:${borderTop};margin:0;padding:20px 0;">
+              return `<table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="border-top:${borderTop};margin:0;padding:22px 0;">
                 <tr>
-                  <td style="padding:0 0 6px 0;font-family:${MONO};font-size:10px;letter-spacing:1.6px;color:${INK_DIM};text-transform:uppercase;width:78px;vertical-align:top;">${escape(
+                  <td style="padding:0 0 8px 0;font-family:${MONO};font-size:11px;letter-spacing:1.6px;color:${INK_DIM};text-transform:uppercase;width:78px;vertical-align:top;">${escape(
                     item.tag,
                   )}</td>
-                  <td style="padding:0 0 6px 0;font-family:${SANS};font-size:13px;font-weight:700;color:${ACCENT};letter-spacing:0.3px;text-transform:uppercase;vertical-align:top;">${escape(
+                  <td style="padding:0 0 8px 0;font-family:${SANS};font-size:14px;font-weight:700;color:${companyColor};letter-spacing:0.3px;text-transform:uppercase;vertical-align:top;">${escape(
                     item.company || s.label,
                   )}</td>
                 </tr>
                 <tr>
                   <td></td>
-                  <td style="font-family:${SERIF};font-size:17px;line-height:1.45;color:${INK};padding:0;">${escape(
+                  <td style="font-family:${SERIF};font-size:19px;line-height:1.5;color:${INK};padding:0;">${escape(
                     item.headline,
                   )}</td>
                 </tr>
@@ -380,11 +406,11 @@ export function renderDigestHtml(d: DigestData): string {
             })
             .join("");
 
-          return `<tr><td style="padding:36px 0 0;">
-            <div style="font-family:${MONO};font-size:10px;letter-spacing:2.4px;color:${ACCENT};text-transform:uppercase;font-weight:600;margin-bottom:10px;">§${pad2(
+          return `<tr><td style="padding:40px 0 0;">
+            <div style="font-family:${MONO};font-size:11px;letter-spacing:2.4px;color:${ACCENT};text-transform:uppercase;font-weight:600;margin-bottom:12px;">§${pad2(
               s.num,
             )} / ${escape(s.label)}</div>
-            <div style="font-family:${SERIF};font-size:30px;font-weight:500;color:${INK_LOUD};letter-spacing:-0.8px;line-height:1.1;margin-bottom:12px;">${escape(
+            <div style="font-family:${SERIF};font-size:34px;font-weight:500;color:${INK_LOUD};letter-spacing:-0.8px;line-height:1.1;margin-bottom:14px;">${escape(
               s.title,
             )}</div>
             ${itemsHtml}
@@ -396,12 +422,12 @@ export function renderDigestHtml(d: DigestData): string {
   // ── Pull quote block ──────────────────────────────────────────────────────
   const pullQuoteHtml = pullQuote
     ? `<tr><td style="padding:40px 48px;">
-        <div style="border-top:2px solid ${ACCENT};border-bottom:2px solid ${ACCENT};padding:32px 0;">
-          <div style="font-family:${MONO};font-size:10px;letter-spacing:2.2px;color:${ACCENT};text-transform:uppercase;margin-bottom:16px;font-weight:600;">★ Quote of the week</div>
-          <div style="font-family:${SERIF};font-size:26px;line-height:1.3;font-style:italic;color:${INK_LOUD};letter-spacing:-0.4px;">&ldquo;${escape(
+        <div style="border-top:2px solid ${ACCENT};border-bottom:2px solid ${ACCENT};padding:34px 0;">
+          <div style="font-family:${MONO};font-size:11px;letter-spacing:2.2px;color:${ACCENT};text-transform:uppercase;margin-bottom:18px;font-weight:600;">★ Quote of the week</div>
+          <div style="font-family:${SERIF};font-size:28px;line-height:1.35;font-style:italic;color:${INK_LOUD};letter-spacing:-0.4px;">&ldquo;${escape(
             pullQuote.text,
           )}&rdquo;</div>
-          ${pullQuote.attribution ? `<div style="font-family:${SANS};font-size:11px;color:${INK_MUTED};margin-top:14px;letter-spacing:0.4px;text-transform:uppercase;font-weight:600;">— ${escape(
+          ${pullQuote.attribution ? `<div style="font-family:${SANS};font-size:12px;color:${INK_MUTED};margin-top:16px;letter-spacing:0.4px;text-transform:uppercase;font-weight:600;">— ${escape(
             pullQuote.attribution,
           )}</div>` : ""}
         </div>
@@ -457,7 +483,7 @@ export function renderDigestHtml(d: DigestData): string {
   <div style="font-family:${SERIF};font-size:72px;line-height:0.92;font-weight:500;letter-spacing:-2.5px;color:${INK_LOUD};margin-top:22px;margin-bottom:8px;">
     The <span style="font-style:italic;color:${ACCENT};">Dispatch</span>.
   </div>
-  <div style="font-family:${SANS};font-size:13px;color:${INK_MUTED};line-height:1.5;max-width:540px;">
+  <div style="font-family:${SANS};font-size:14px;color:${INK_MUTED};line-height:1.55;max-width:560px;">
     A weekly read on what's moving in the cybersecurity market — assembled from LinkedIn, Gartner, and our own analysis.
   </div>
 </td></tr>
@@ -467,9 +493,9 @@ export function renderDigestHtml(d: DigestData): string {
   <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%">
     <tr>
       <td width="42%" valign="top" style="padding-right:18px;">
-        <div style="font-family:${MONO};font-size:10px;letter-spacing:2px;color:${ACCENT};text-transform:uppercase;font-weight:600;margin-bottom:10px;">▲ Material events</div>
+        <div style="font-family:${MONO};font-size:11px;letter-spacing:2px;color:${ACCENT};text-transform:uppercase;font-weight:600;margin-bottom:12px;">▲ Material events</div>
         <div style="font-family:${SERIF};font-size:112px;line-height:0.85;font-weight:500;color:${INK_LOUD};letter-spacing:-4px;">${summary.interestingPostsCount}</div>
-        <div style="font-family:${SANS};font-size:12px;color:${INK_DIM};margin-top:10px;">across ${summary.companiesWithActivity} of ${summary.totalCompanies} vendors we watch</div>
+        <div style="font-family:${SANS};font-size:13px;color:${INK_DIM};margin-top:12px;">across ${summary.companiesWithActivity} of ${summary.totalCompanies} vendors we watch</div>
       </td>
       <td width="1%" style="background:${HAIR};width:1px;">&nbsp;</td>
       <td valign="middle" style="padding-left:26px;">
@@ -500,24 +526,24 @@ ${pullQuoteHtml}
 ${errorsHtml}
 
 <!-- CTA -->
-<tr><td style="padding:24px 48px 40px;border-top:1px solid ${HAIR};text-align:center;">
-  <div style="font-family:${MONO};font-size:10px;letter-spacing:2.2px;color:${INK_DIM};text-transform:uppercase;margin-bottom:16px;">The full briefing</div>
-  <a href="${escape(appUrl)}" style="display:inline-block;background:${ACCENT};color:${BG};padding:16px 36px;text-decoration:none;font-family:${SANS};font-weight:700;font-size:13px;letter-spacing:0.6px;text-transform:uppercase;border-radius:2px;">Open dashboard →</a>
-  <div style="font-family:${SANS};font-size:12px;color:${INK_DIM};margin-top:14px;">Per-company cards, historical charts, and raw posts.</div>
+<tr><td style="padding:28px 48px 44px;border-top:1px solid ${HAIR};text-align:center;">
+  <div style="font-family:${MONO};font-size:11px;letter-spacing:2.2px;color:${INK_DIM};text-transform:uppercase;margin-bottom:18px;">The full briefing</div>
+  <a href="${escape(appUrl)}" style="display:inline-block;background:${ACCENT};color:${BG};padding:18px 40px;text-decoration:none;font-family:${SANS};font-weight:700;font-size:14px;letter-spacing:0.6px;text-transform:uppercase;border-radius:2px;">Open dashboard →</a>
+  <div style="font-family:${SANS};font-size:13px;color:${INK_DIM};margin-top:16px;">Per-company cards, historical charts, and raw posts.</div>
 </td></tr>
 
 <!-- Footer -->
 <tr><td style="padding:0 48px 40px;border-top:1px solid ${HAIR};">
-  <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="margin-top:24px;">
+  <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="margin-top:26px;">
     <tr>
-      <td valign="bottom" style="font-family:${MONO};font-size:10px;letter-spacing:1.8px;color:${INK_DIM};text-transform:uppercase;line-height:1.9;">
+      <td valign="bottom" style="font-family:${MONO};font-size:11px;letter-spacing:1.8px;color:${INK_DIM};text-transform:uppercase;line-height:1.9;">
         Run №${meta.runId} · ${meta.companiesCount} vendor${meta.companiesCount === 1 ? "" : "s"}<br/>
         ${meta.credits} credits · delivered ${escape(meta.dateShort)}
       </td>
-      <td valign="bottom" align="right" style="font-family:${MONO};font-size:10px;letter-spacing:2px;color:${ACCENT};text-transform:uppercase;font-weight:600;">—fin—</td>
+      <td valign="bottom" align="right" style="font-family:${MONO};font-size:11px;letter-spacing:2px;color:${ACCENT};text-transform:uppercase;font-weight:600;">—fin—</td>
     </tr>
   </table>
-  <div style="font-family:${SANS};font-size:11px;color:${INK_FADE};margin-top:14px;font-style:italic;max-width:420px;line-height:1.6;">
+  <div style="font-family:${SANS};font-size:12px;color:${INK_FADE};margin-top:16px;font-style:italic;max-width:440px;line-height:1.6;">
     You're receiving this because you opted into weekly digests. Reply to this email if you want to change frequency.
   </div>
 </td></tr>
