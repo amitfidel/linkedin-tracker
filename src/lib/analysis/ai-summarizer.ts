@@ -53,19 +53,30 @@ interface PostForSummary {
 async function collectInterestingPosts(sinceDays = 7): Promise<PostForSummary[]> {
   const since = new Date(Date.now() - sinceDays * 86400000).toISOString();
 
+  // Filter by postedAt (when LinkedIn published), not scrapedAt — otherwise
+  // posts that were re-confirmed by Apify but already existed in our DB
+  // (dedup'd to a counts-only update) get excluded from the digest even
+  // though the dashboard still shows them. Fall back to scrapedAt for posts
+  // missing a postedAt value.
   const rows = await db
     .select({
       companyName: companies.name,
       content: companyPosts.content,
       postedAt: companyPosts.postedAt,
+      scrapedAt: companyPosts.scrapedAt,
       likesCount: companyPosts.likesCount,
     })
     .from(companyPosts)
     .innerJoin(companies, eq(companyPosts.companyId, companies.id))
-    .where(and(gte(companyPosts.scrapedAt, since), eq(companies.isActive, true)))
-    .orderBy(desc(companyPosts.scrapedAt));
+    .where(eq(companies.isActive, true))
+    .orderBy(desc(companyPosts.postedAt));
 
-  const enriched = rows.map((r, i) => ({
+  const filtered = rows.filter((r) => {
+    const t = r.postedAt ?? r.scrapedAt ?? "";
+    return t >= since;
+  });
+
+  const enriched = filtered.map((r, i) => ({
     id: `p${i}`,
     companyName: r.companyName,
     content: r.content ?? "",
