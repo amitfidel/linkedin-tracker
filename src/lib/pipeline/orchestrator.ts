@@ -11,10 +11,10 @@ import {
 import { eq, and } from "drizzle-orm";
 import {
   scrapeCompanies,
-  scrapePosts,
   scrapeJobs,
   scrapePeople,
 } from "../apify/scraper";
+import { scrapeCompanyPostsLocal } from "../linkedin/posts-scraper";
 import {
   transformCompany,
   transformPost,
@@ -135,9 +135,9 @@ export async function runPipeline(triggerType: "manual" | "scheduled") {
       stepErrors.push(msg);
     }
 
-    // ── Step 2: Posts ────────────────────────────────────────────────────────
+    // ── Step 2: Posts (local Playwright + li_at cookie) ──────────────────────
     try {
-      const postsResult = await scrapePosts(companyUrls);
+      const postsResult = await scrapeCompanyPostsLocal(companyUrls);
       apifyRunIds.push(postsResult.runId);
       totalCredits += postsResult.creditsUsed;
 
