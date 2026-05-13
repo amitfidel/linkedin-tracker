@@ -36,6 +36,13 @@
       "when": 1778678405796,
       "tag": "0004_spotty_nuke",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "6",
+      "when": 1778679840367,
+      "tag": "0005_small_arclight",
+      "breakpoints": true
     }
   ]
 }

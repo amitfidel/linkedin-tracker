@@ -39,6 +39,10 @@ import {
   detectMoves,
   invalidateAliasCache,
 } from "../analysis/personnel-moves";
+import {
+  classifyPendingComments,
+  backfillInteractionSentiment,
+} from "../analysis/sentiment-classifier";
 import { dispatchSlackAlerts } from "../notify/slack";
 
 async function sha256(text: string): Promise<string> {
@@ -502,6 +506,12 @@ export async function runPipeline(triggerType: "manual" | "scheduled") {
             );
             console.log(`[client-watch] ${inserted.length} new engagements stored`);
 
+            // Classify comment sentiment via Groq before we build interactions
+            // so the denormalised column on clientInteractions starts populated.
+            const sentClassified = await classifyPendingComments();
+            if (sentClassified)
+              console.log(`[sentiment] classified ${sentClassified} comments`);
+
             const roster = await buildClientRoster();
             console.log(
               `[client-watch] roster: ${roster.byProfileUrl.size} known profiles, ${roster.byName.length} client names`,
@@ -545,6 +555,11 @@ export async function runPipeline(triggerType: "manual" | "scheduled") {
         const movesV2 = await detectMoves(runId);
         if (movesV2)
           console.log(`[personnel-moves] cross-category transitions: ${movesV2}`);
+
+        // Backfill sentiment onto any clientInteractions inserted earlier
+        // in this run that didn't have a sentiment value at insert time
+        // (e.g. signal created before the classifier ran).
+        await backfillInteractionSentiment();
       } catch (e) {
         const msg = `Client Watch: ${e instanceof Error ? e.message : String(e)}`;
         console.error(msg);

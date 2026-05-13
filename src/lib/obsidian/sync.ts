@@ -105,6 +105,13 @@ interface InteractionRow {
   matchedBy: string | null;
   competitorName: string;
   detectedAt: string | null;
+  sentiment?: string | null;
+}
+
+function sentimentTag(s: string | null | undefined): string {
+  if (s === "positive") return " 🚨 _endorses competitor_";
+  if (s === "negative") return " 💡 _sepio opening_";
+  return "";
 }
 
 function clientInteractionsBlock(items: InteractionRow[]): string {
@@ -127,7 +134,8 @@ function clientInteractionsBlock(items: InteractionRow[]): string {
     for (const e of events.slice(0, 15)) {
       const date = e.detectedAt?.slice(0, 10) ?? "";
       const tag = e.matchedBy ? ` _(via ${e.matchedBy})_` : "";
-      lines.push(`- \`${date}\` ${e.summary ?? ""}${tag}`);
+      const sentTag = sentimentTag(e.sentiment);
+      lines.push(`- \`${date}\` ${e.summary ?? ""}${tag}${sentTag}`);
     }
     if (events.length > 15)
       lines.push(`- …and ${events.length - 15} more`);
@@ -185,6 +193,7 @@ export async function syncToObsidian(): Promise<void> {
       engagerName: clientInteractions.engagerName,
       matchedBy: clientInteractions.matchedBy,
       detectedAt: clientInteractions.detectedAt,
+      sentiment: clientInteractions.sentiment,
     })
     .from(clientInteractions)
     .orderBy(desc(clientInteractions.detectedAt))
@@ -232,6 +241,7 @@ export async function syncToObsidian(): Promise<void> {
           matchedBy: i.matchedBy,
           competitorName: idToName.get(i.competitorCompanyId) ?? "?",
           detectedAt: i.detectedAt,
+          sentiment: i.sentiment,
         }));
       interactionsSection = clientInteractionsBlock(events);
     } else if (c.category === "competitor") {
@@ -244,6 +254,7 @@ export async function syncToObsidian(): Promise<void> {
           matchedBy: i.matchedBy,
           competitorName: idToName.get(i.clientCompanyId) ?? "?",
           detectedAt: i.detectedAt,
+          sentiment: i.sentiment,
         }));
       interactionsSection = competitorInteractionsBlock(events);
     } else {

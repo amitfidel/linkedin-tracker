@@ -32,6 +32,10 @@ import {
   detectMoves,
   invalidateAliasCache,
 } from "../analysis/personnel-moves";
+import {
+  classifyPendingComments,
+  backfillInteractionSentiment,
+} from "../analysis/sentiment-classifier";
 import { dispatchSlackAlerts } from "../notify/slack";
 import { syncToObsidian } from "../obsidian/sync";
 import { like } from "drizzle-orm";
@@ -189,6 +193,12 @@ export async function runDailyWatch(): Promise<{
       engagementsScraped = eng.data.length;
 
       const inserted = await persistEngagements(eng.data, runId);
+
+      // Classify sentiment on any new comments before we attribute them
+      const sentClassified = await classifyPendingComments();
+      if (sentClassified)
+        console.log(`[sentiment] classified ${sentClassified} comments`);
+
       const roster = await buildClientRoster();
       signalsCreated += await recordEngagementInteractions({
         engagements: inserted,
@@ -196,6 +206,7 @@ export async function runDailyWatch(): Promise<{
         roster,
         runId,
       });
+      await backfillInteractionSentiment();
     }
 
     // Mention scan (cheap) + observation/move detection

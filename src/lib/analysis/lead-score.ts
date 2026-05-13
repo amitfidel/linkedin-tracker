@@ -16,6 +16,7 @@
 import { db } from "@/db";
 import { clientInteractions, companies } from "@/db/schema";
 import { and, gte, inArray, eq } from "drizzle-orm";
+import { signalStrength } from "./signal-strength";
 
 interface RawSignal {
   id: number;
@@ -24,18 +25,11 @@ interface RawSignal {
   signalType: string;
   summary: string | null;
   detectedAt: string | null;
+  sentiment: string | null;
 }
 
 function baseStrength(s: RawSignal): number {
-  if (s.signalType === "personnel_move") return 100;
-  if (s.signalType === "post_engagement") {
-    const sum = s.summary ?? "";
-    if (sum.includes(' commented: "')) return 80;
-    if (sum.includes(" reposted")) return 60;
-    return 40; // like
-  }
-  if (s.signalType === "post_mention") return 30;
-  return 10;
+  return signalStrength(s);
 }
 
 function decayedStrength(s: RawSignal, halfLifeMs: number): number {
@@ -76,6 +70,7 @@ export async function computeLeadScores(opts: {
       signalType: clientInteractions.signalType,
       summary: clientInteractions.summary,
       detectedAt: clientInteractions.detectedAt,
+      sentiment: clientInteractions.sentiment,
     })
     .from(clientInteractions)
     .where(gte(clientInteractions.detectedAt, since))

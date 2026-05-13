@@ -53,6 +53,13 @@ export interface DigestClientInteraction {
   engagerName?: string;
   matchedBy?: "profile_url" | "headline" | string;
   alreadyAlerted?: boolean;
+  sentiment?: "positive" | "negative" | "neutral" | null;
+}
+
+function sentimentBadge(s: string | null | undefined): string {
+  if (s === "positive") return ` <span style="font-family:${MONO};font-size:9px;letter-spacing:1.4px;color:#e36b6b;text-transform:uppercase;margin-left:8px;background:#3a1a1a;padding:2px 6px;border-radius:2px;">🚨 endorses competitor</span>`;
+  if (s === "negative") return ` <span style="font-family:${MONO};font-size:9px;letter-spacing:1.4px;color:#5eead4;text-transform:uppercase;margin-left:8px;background:#0f2e2a;padding:2px 6px;border-radius:2px;">💡 sepio opening</span>`;
+  return "";
 }
 
 export interface DigestTopAccount {
@@ -490,10 +497,11 @@ export function renderDigestHtml(d: DigestData): string {
               const alertedTag = ci.alreadyAlerted
                 ? `<span style="font-family:${MONO};font-size:9px;letter-spacing:1.4px;color:${INK_DIM};text-transform:uppercase;margin-left:8px;">🔔 slack-notified</span>`
                 : "";
+              const sentTag = sentimentBadge(ci.sentiment);
               return `<table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="border-top:${borderTop};padding:18px 0;margin:0;">
                 <tr>
                   <td style="font-family:${MONO};font-size:10px;letter-spacing:1.6px;color:${INK_DIM};text-transform:uppercase;width:120px;vertical-align:top;">${escape(clientLabelForSignal(ci.signalType))}</td>
-                  <td style="font-family:${SANS};font-size:14px;font-weight:700;color:${clientColor};letter-spacing:0.3px;text-transform:uppercase;vertical-align:top;">${escape(ci.clientName)}<span style="color:${INK_DIM};font-weight:400;text-transform:none;letter-spacing:0;"> ↔ </span><span style="color:${colorForCompany(ci.competitorName)};">${escape(ci.competitorName)}</span>${matchTag}${alertedTag}</td>
+                  <td style="font-family:${SANS};font-size:14px;font-weight:700;color:${clientColor};letter-spacing:0.3px;text-transform:uppercase;vertical-align:top;">${escape(ci.clientName)}<span style="color:${INK_DIM};font-weight:400;text-transform:none;letter-spacing:0;"> ↔ </span><span style="color:${colorForCompany(ci.competitorName)};">${escape(ci.competitorName)}</span>${matchTag}${alertedTag}${sentTag}</td>
                 </tr>
                 <tr>
                   <td></td>

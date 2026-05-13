@@ -11,6 +11,7 @@
 import { db } from "@/db";
 import { clientInteractions, companies, companyPosts } from "@/db/schema";
 import { and, eq, isNull, inArray, sql } from "drizzle-orm";
+import { signalStrength } from "../analysis/signal-strength";
 
 export interface SignalForAlert {
   id: number;
@@ -22,23 +23,10 @@ export interface SignalForAlert {
   engagerName: string | null;
   engagerProfileUrl: string | null;
   postUrl: string | null;
+  sentiment?: string | null;
 }
 
-// Signal-type strength ranking. Anything ≥ SLACK_MIN_STRENGTH gets alerted.
-export function signalStrength(s: {
-  signalType: string;
-  summary: string | null;
-}): number {
-  if (s.signalType === "personnel_move") return 100;
-  if (s.signalType === "post_engagement") {
-    const sum = s.summary ?? "";
-    if (sum.includes(' commented: "')) return 80;
-    if (sum.includes(" reposted")) return 60;
-    return 40; // like
-  }
-  if (s.signalType === "post_mention") return 30;
-  return 10;
-}
+export { signalStrength };
 
 function emojiForSignal(t: string): string {
   if (t === "personnel_move") return "🚨";
@@ -94,6 +82,7 @@ export async function pendingAlerts(
       engagerName: clientInteractions.engagerName,
       engagerProfileUrl: clientInteractions.engagerProfileUrl,
       postId: clientInteractions.postId,
+      sentiment: clientInteractions.sentiment,
     })
     .from(clientInteractions)
     .where(isNull(clientInteractions.alertedAt))
@@ -141,6 +130,7 @@ export async function pendingAlerts(
     engagerName: r.engagerName,
     engagerProfileUrl: r.engagerProfileUrl,
     postUrl: r.postId ? (postMap.get(r.postId) ?? null) : null,
+    sentiment: r.sentiment,
   }));
 }
 

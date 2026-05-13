@@ -529,6 +529,7 @@ export async function recentClientInteractions(opts: {
       postId: clientInteractions.postId,
       detectedAt: clientInteractions.detectedAt,
       alertedAt: clientInteractions.alertedAt,
+      sentiment: clientInteractions.sentiment,
     })
     .from(clientInteractions)
     .where(gte(clientInteractions.detectedAt, since))

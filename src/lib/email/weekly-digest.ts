@@ -91,6 +91,7 @@ export async function sendWeeklyDigest(input: WeeklyDigestInput): Promise<void> 
       // Mark anything already pushed to Slack so the email can badge it
       // — keeps the email focused on net-new info without losing context.
       alreadyAlerted: !!(c as { alertedAt?: string | null }).alertedAt,
+      sentiment: (c as { sentiment?: "positive" | "negative" | "neutral" | null }).sentiment ?? null,
     })),
     meta: {
       runId: input.runId,

@@ -186,6 +186,13 @@ export const postEngagements = sqliteTable(
     engagedAt: text("engaged_at"),
     scrapedAt: text("scraped_at").default(sql`CURRENT_TIMESTAMP`),
     scrapeRunId: integer("scrape_run_id").references(() => scrapeRuns.id),
+    // Sentiment toward the competitor whose post this engagement is on.
+    // Set by the Groq classifier for comment-type engagements only:
+    //   'positive'  — client employee praising the competitor (alarm)
+    //   'negative'  — client criticising the competitor (opportunity for Sepio)
+    //   'neutral'   — generic / question / off-topic
+    //   null        — not yet classified (or non-comment engagement)
+    sentiment: text("sentiment"),
   },
   (table) => [
     // Dedup key — same engager + same engagement type on the same post is one row
@@ -227,6 +234,9 @@ export const clientInteractions = sqliteTable(
     // Null = not yet alerted; used to gate Slack notifications + filter
     // already-pushed signals out of the weekly digest's Client Watch list.
     alertedAt: text("alerted_at"),
+    // Denormalised from postEngagements.sentiment — copied at insert time
+    // so the strength function + lead score don't need a join.
+    sentiment: text("sentiment"),
   },
   (table) => [
     index("idx_client_interactions_client").on(
