@@ -17,6 +17,7 @@
  * Set OBSIDIAN_VAULT_PATH in .env to override the default location.
  */
 import { promises as fs } from "fs";
+import { spawn } from "child_process";
 import path from "path";
 import { db } from "@/db";
 import {
@@ -285,4 +286,30 @@ export async function syncToObsidian(): Promise<void> {
   count++;
 
   console.log(`\nwrote ${count} notes to ${VAULT_PATH}`);
+
+  // Optional: bring Obsidian forward to the vault we just synced.
+  // Requires the "Command line interface" toggle in Obsidian settings.
+  // Skipped silently in CI / headless contexts.
+  if (process.env.OBSIDIAN_OPEN_AFTER_SYNC !== "0") {
+    const vaultName = path.basename(VAULT_PATH);
+    const url = `obsidian://open?vault=${encodeURIComponent(vaultName)}`;
+    try {
+      if (process.platform === "win32") {
+        spawn("cmd", ["/c", "start", "", url], {
+          detached: true,
+          stdio: "ignore",
+        }).unref();
+      } else if (process.platform === "darwin") {
+        spawn("open", [url], { detached: true, stdio: "ignore" }).unref();
+      } else {
+        spawn("xdg-open", [url], { detached: true, stdio: "ignore" }).unref();
+      }
+      console.log(`[obsidian] opened vault "${vaultName}" in Obsidian`);
+    } catch (e) {
+      console.warn(
+        `[obsidian] couldn't open vault automatically:`,
+        e instanceof Error ? e.message : e,
+      );
+    }
+  }
 }

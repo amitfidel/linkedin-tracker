@@ -15,7 +15,7 @@ import {
   scrapeRuns,
 } from "../src/db/schema";
 import { and, eq, inArray } from "drizzle-orm";
-import { scrapePeople } from "../src/lib/apify/scraper";
+import { scrapeCompanyEmployeesLocal } from "../src/lib/linkedin/employees-scraper";
 import { transformPerson } from "../src/lib/pipeline/transformers";
 import { detectPersonnelChanges } from "../src/lib/pipeline/diff-detector";
 import { reattributeAllEngagements } from "../src/lib/analysis/client-watch";
@@ -51,8 +51,11 @@ async function main() {
   );
 
   try {
-    const result = await scrapePeople(scrapeable.map((c) => c.linkedinUrl));
-    console.log(`[refresh] apify returned ${result.data.length} people`);
+    // Local Playwright via persistent profile — replaces the broken Apify path
+    const result = await scrapeCompanyEmployeesLocal(
+      scrapeable.map((c) => ({ url: c.linkedinUrl, name: c.name })),
+    );
+    console.log(`[refresh] scraped ${result.data.length} people`);
 
     const findByName = (name?: string) => {
       if (!name) return undefined;

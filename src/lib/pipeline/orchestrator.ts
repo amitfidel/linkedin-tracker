@@ -12,9 +12,9 @@ import { eq, and, like, gte, inArray } from "drizzle-orm";
 import {
   scrapeCompanies,
   scrapeJobs,
-  scrapePeople,
 } from "../apify/scraper";
 import { scrapeCompanyPostsLocal } from "../linkedin/posts-scraper";
+import { scrapeCompanyEmployeesLocal } from "../linkedin/employees-scraper";
 import {
   transformCompany,
   transformPost,
@@ -284,11 +284,15 @@ export async function runPipeline(triggerType: "manual" | "scheduled") {
       stepErrors.push(msg);
     }
 
-    // ── Step 4: Employees ────────────────────────────────────────────────────
+    // ── Step 4: Employees (local Playwright via persistent profile) ─────────
+    // Replaces the Apify company_employees mode, which is degraded for the
+    // public actor (no cookie support; SERP fallback rate-limited).
     try {
-      const peopleResult = await scrapePeople(companyUrls);
+      const peopleSource = activeCompanies
+        .filter((c) => !c.linkedinUrl.includes("/search/results/"))
+        .map((c) => ({ url: c.linkedinUrl, name: c.name }));
+      const peopleResult = await scrapeCompanyEmployeesLocal(peopleSource);
       apifyRunIds.push(peopleResult.runId);
-      totalCredits += peopleResult.creditsUsed;
 
       const peopleByCompany = new Map<number, Array<ReturnType<typeof transformPerson>>>();
 
