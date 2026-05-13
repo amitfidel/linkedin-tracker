@@ -8,7 +8,7 @@ import {
   scrapeRuns,
   gartnerInsights,
 } from "@/db/schema";
-import { eq, and } from "drizzle-orm";
+import { eq, and, like } from "drizzle-orm";
 import {
   scrapeCompanies,
   scrapeJobs,
@@ -29,6 +29,19 @@ import { sendWeeklyDigest } from "../email/weekly-digest";
 async function sha256(text: string): Promise<string> {
   const crypto = await import("crypto");
   return crypto.createHash("sha256").update(text).digest("hex");
+}
+
+/**
+ * Pull the LinkedIn activity ID out of a post URL. Both formats below
+ * resolve to the same numeric ID:
+ *   https://www.linkedin.com/posts/agrint_oman-mafwr-activity-7453472808187129858-SpZV
+ *   https://www.linkedin.com/feed/update/urn:li:activity:7453472808187129858/
+ * Returns null if no ID is found.
+ */
+function extractActivityId(url: string | null | undefined): string | null {
+  if (!url) return null;
+  const m = /activity[:-](\d{10,})/.exec(url);
+  return m?.[1] ?? null;
 }
 
 export async function runPipeline(triggerType: "manual" | "scheduled") {
@@ -150,11 +163,26 @@ export async function runPipeline(triggerType: "manual" | "scheduled") {
         const transformed = transformPost(raw, company.id);
         if (!transformed.linkedinPostId) continue;
 
-        const existing = await db
-          .select({ id: companyPosts.id })
-          .from(companyPosts)
-          .where(eq(companyPosts.linkedinPostId, transformed.linkedinPostId))
-          .get();
+        // Dedup by activity ID, not full URL — Apify (slug-form) and the
+        // local Playwright scraper (URN-form) produce different URLs for
+        // the same post. Both URLs embed the same activity ID.
+        const activityId = extractActivityId(transformed.linkedinPostId);
+        const existing = activityId
+          ? await db
+              .select({ id: companyPosts.id })
+              .from(companyPosts)
+              .where(
+                and(
+                  eq(companyPosts.companyId, company.id),
+                  like(companyPosts.linkedinPostId, `%${activityId}%`),
+                ),
+              )
+              .get()
+          : await db
+              .select({ id: companyPosts.id })
+              .from(companyPosts)
+              .where(eq(companyPosts.linkedinPostId, transformed.linkedinPostId))
+              .get();
 
         if (!existing) {
           await db.insert(companyPosts).values({ ...transformed, scrapeRunId: runId });
