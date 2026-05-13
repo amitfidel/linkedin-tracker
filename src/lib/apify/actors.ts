@@ -46,11 +46,16 @@ export function buildJobsInput(companyName: string, maxResults = 50) {
   };
 }
 
-/** Batch all company URLs in a single run to get key employees (via SERP). */
+/** Batch all company URLs in a single run to get key employees (via SERP).
+ *  With many client companies the total can exceed Apify's 250-result soft
+ *  cap, so we set `confirmLargeRun` to bypass the safety prompt. Per-company
+ *  pull is capped at 12 to keep the bill bounded.
+ */
 export function buildPeopleInput(companyUrls: string[]) {
   return {
     urls: companyUrls,
     mode: "company_employees",
-    maxResults: companyUrls.length * 15, // ~15 key people per company
+    maxResults: companyUrls.length * 12,
+    confirmLargeRun: true,
   };
 }

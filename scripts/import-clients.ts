@@ -54,9 +54,14 @@ function parseCsv(text: string): Array<{ name: string; linkedinUrl: string }> {
     }
     const name = cols[0].trim();
     const linkedinUrl = normaliseUrl(cols[1]);
-    if (!name || !linkedinUrl.includes("linkedin.com/company/")) {
+    if (!name || !linkedinUrl.includes("linkedin.com")) {
       console.warn(`  skip (invalid url): ${line}`);
       continue;
+    }
+    if (linkedinUrl.includes("/search/results/")) {
+      console.warn(
+        `  ⚠ placeholder URL kept (no real company page yet): ${name}`,
+      );
     }
     rows.push({ name, linkedinUrl });
   }
