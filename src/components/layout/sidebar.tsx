@@ -10,6 +10,7 @@ import {
   MessageSquare,
   Users,
   Network,
+  Eye,
   Settings,
   Shield,
 } from "lucide-react";
@@ -17,6 +18,7 @@ import {
 const navigation = [
   { name: "Dashboard", href: "/", icon: LayoutDashboard },
   { name: "Companies", href: "/companies", icon: Building2 },
+  { name: "Clients", href: "/clients", icon: Eye },
   { name: "Hiring Trends", href: "/hiring", icon: TrendingUp },
   { name: "Posts", href: "/posts", icon: MessageSquare },
   { name: "Personnel", href: "/personnel", icon: Users },

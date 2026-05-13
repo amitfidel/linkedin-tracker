@@ -45,6 +45,15 @@ export interface DigestSection {
   items: DigestSectionItem[];
 }
 
+export interface DigestClientInteraction {
+  signalType: "post_engagement" | "post_mention" | "personnel_move" | string;
+  clientName: string;
+  competitorName: string;
+  summary: string;
+  engagerName?: string;
+  matchedBy?: "profile_url" | "headline" | string;
+}
+
 export interface DigestData {
   date: string; // "Mon, Apr 20, 2026"
   issue: number;
@@ -60,6 +69,7 @@ export interface DigestData {
   };
   sections: DigestSection[];
   stepErrors: string[];
+  clientInteractions?: DigestClientInteraction[];
   meta: {
     runId: number;
     companiesCount: number;
@@ -310,7 +320,7 @@ function inferCategoryKey(label: string): string {
 
 // ── Render ───────────────────────────────────────────────────────────────────
 export function renderDigestHtml(d: DigestData): string {
-  const { summary, sections, meta, appUrl, stepErrors, headline, lede, pullQuote } = d;
+  const { summary, sections, meta, appUrl, stepErrors, headline, lede, pullQuote, clientInteractions } = d;
 
   const preheader = `${summary.interestingPostsCount} material events across ${summary.companiesWithActivity}/${summary.totalCompanies} vendors · ${summary.totalPostsThisWeek} posts · ${summary.totalActiveJobs} open jobs.`;
 
@@ -419,6 +429,40 @@ export function renderDigestHtml(d: DigestData): string {
         .join("")
     : `<tr><td style="padding:48px 0;text-align:center;font-family:${SERIF};font-size:18px;color:${INK_MUTED};font-style:italic;">No material events captured this week.</td></tr>`;
 
+  // ── Client Watch block ────────────────────────────────────────────────────
+  const clientLabelForSignal = (s: string) => {
+    if (s === "personnel_move") return "Personnel move";
+    if (s === "post_mention") return "Mention";
+    return "Engagement";
+  };
+  const clientWatchHtml =
+    clientInteractions && clientInteractions.length > 0
+      ? `<tr><td style="padding:40px 48px 0;">
+          <div style="font-family:${MONO};font-size:11px;letter-spacing:2.4px;color:${ACCENT};text-transform:uppercase;font-weight:600;margin-bottom:12px;">§ Client Watch</div>
+          <div style="font-family:${SERIF};font-size:30px;font-weight:500;color:${INK_LOUD};letter-spacing:-0.6px;line-height:1.15;margin-bottom:8px;">Who's circling your clients.</div>
+          <div style="font-family:${SANS};font-size:13px;color:${INK_DIM};margin-bottom:18px;">Cross-signals between your clients and tracked competitors (Armis, Claroty).</div>
+          ${clientInteractions
+            .map((ci, i) => {
+              const clientColor = colorForCompany(ci.clientName);
+              const borderTop = i === 0 ? "none" : `1px solid ${HAIR}`;
+              const matchTag = ci.matchedBy
+                ? `<span style="font-family:${MONO};font-size:9px;letter-spacing:1.4px;color:${INK_DIM};text-transform:uppercase;margin-left:8px;">via ${escape(ci.matchedBy)}</span>`
+                : "";
+              return `<table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="border-top:${borderTop};padding:18px 0;margin:0;">
+                <tr>
+                  <td style="font-family:${MONO};font-size:10px;letter-spacing:1.6px;color:${INK_DIM};text-transform:uppercase;width:120px;vertical-align:top;">${escape(clientLabelForSignal(ci.signalType))}</td>
+                  <td style="font-family:${SANS};font-size:14px;font-weight:700;color:${clientColor};letter-spacing:0.3px;text-transform:uppercase;vertical-align:top;">${escape(ci.clientName)}<span style="color:${INK_DIM};font-weight:400;text-transform:none;letter-spacing:0;"> ↔ </span><span style="color:${colorForCompany(ci.competitorName)};">${escape(ci.competitorName)}</span>${matchTag}</td>
+                </tr>
+                <tr>
+                  <td></td>
+                  <td style="font-family:${SERIF};font-size:17px;line-height:1.5;color:${INK};padding:6px 0 0;">${escape(ci.summary)}</td>
+                </tr>
+              </table>`;
+            })
+            .join("")}
+        </td></tr>`
+      : "";
+
   // ── Pull quote block ──────────────────────────────────────────────────────
   const pullQuoteHtml = pullQuote
     ? `<tr><td style="padding:40px 48px;">
@@ -521,6 +565,8 @@ ${ledeHtml}
   </table>
 </td></tr>
 
+${clientWatchHtml}
+
 ${pullQuoteHtml}
 
 ${errorsHtml}
@@ -557,7 +603,7 @@ ${errorsHtml}
 
 // ── Plain-text version (used as email fallback) ──────────────────────────────
 export function renderDigestText(d: DigestData): string {
-  const { summary, sections, meta, appUrl, headline, lede, pullQuote } = d;
+  const { summary, sections, meta, appUrl, headline, lede, pullQuote, clientInteractions } = d;
   const lines: string[] = [];
   lines.push(`THE DISPATCH — ${d.date}`);
   lines.push(`Vol.1 · №${meta.runId}`);
@@ -584,6 +630,14 @@ export function renderDigestText(d: DigestData): string {
       lines.push(`  [${item.tag}] ${item.company}`);
       lines.push(`  ${item.headline}`);
       if (item.take) lines.push(`    why it matters: ${item.take}`);
+      lines.push("");
+    }
+  }
+  if (clientInteractions && clientInteractions.length) {
+    lines.push("§ CLIENT WATCH");
+    for (const ci of clientInteractions) {
+      lines.push(`  [${ci.signalType}] ${ci.clientName} ↔ ${ci.competitorName}`);
+      lines.push(`  ${ci.summary}`);
       lines.push("");
     }
   }

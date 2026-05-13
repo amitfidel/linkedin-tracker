@@ -8,7 +8,7 @@ import {
   scrapeRuns,
   gartnerInsights,
 } from "@/db/schema";
-import { eq, and, like } from "drizzle-orm";
+import { eq, and, like, gte, inArray } from "drizzle-orm";
 import {
   scrapeCompanies,
   scrapeJobs,
@@ -25,6 +25,14 @@ import { detectPersonnelChanges } from "./diff-detector";
 import { generateAISummary } from "../analysis/ai-summarizer";
 import { scrapeGartnerInsights, discoverGartnerUrl } from "../gartner/scraper";
 import { sendWeeklyDigest } from "../email/weekly-digest";
+import { scrapeEngagers } from "../linkedin/engagers-scraper";
+import {
+  buildClientRoster,
+  persistEngagements,
+  recordEngagementInteractions,
+  scanMentions,
+  scanPersonnelMoves,
+} from "../analysis/client-watch";
 
 async function sha256(text: string): Promise<string> {
   const crypto = await import("crypto");
@@ -80,7 +88,17 @@ export async function runPipeline(triggerType: "manual" | "scheduled") {
       return { runId, status: "completed", message: "No active companies to scrape" };
     }
 
+    // Split by role: tracked vendors (self + competitor) get the full LinkedIn
+    // scrape (posts/jobs/Gartner). Clients get only company info + employees,
+    // which is enough to attribute engagers on competitor posts.
+    const trackedCompanies = activeCompanies.filter(
+      (c) => c.category === "self" || c.category === "competitor",
+    );
+    const clientCompanies = activeCompanies.filter(
+      (c) => c.category === "client",
+    );
     const companyUrls = activeCompanies.map((c) => c.linkedinUrl);
+    const trackedUrls = trackedCompanies.map((c) => c.linkedinUrl);
 
     // Build a map keyed by the normalized LinkedIn URL for fast lookups
     const companyUrlMap = new Map(
@@ -149,8 +167,10 @@ export async function runPipeline(triggerType: "manual" | "scheduled") {
     }
 
     // ── Step 2: Posts (local Playwright + li_at cookie) ──────────────────────
+    // Only scrape posts for tracked vendors — clients are measured by who
+    // engages with competitor posts, not by their own post stream.
     try {
-      const postsResult = await scrapeCompanyPostsLocal(companyUrls);
+      const postsResult = await scrapeCompanyPostsLocal(trackedUrls);
       apifyRunIds.push(postsResult.runId);
       totalCredits += postsResult.creditsUsed;
 
@@ -205,8 +225,9 @@ export async function runPipeline(triggerType: "manual" | "scheduled") {
     }
 
     // ── Step 3: Jobs (per company) ───────────────────────────────────────────
+    // Tracked vendors only — we don't follow client hiring as part of v1.
     try {
-      const jobsResult = await scrapeJobs(activeCompanies);
+      const jobsResult = await scrapeJobs(trackedCompanies);
       // runId may be comma-separated when multiple company runs happened
       if (jobsResult.runId) apifyRunIds.push(...jobsResult.runId.split(",").filter(Boolean));
       totalCredits += jobsResult.creditsUsed;
@@ -316,8 +337,8 @@ export async function runPipeline(triggerType: "manual" | "scheduled") {
       stepErrors.push(msg);
     }
 
-    // ── Step 4b: Auto-discover Gartner URLs for companies that don't have one ──
-    for (const company of activeCompanies) {
+    // ── Step 4b: Auto-discover Gartner URLs for tracked companies that don't have one ──
+    for (const company of trackedCompanies) {
       if (!company.gartnerUrl) {
         try {
           const discovered = await discoverGartnerUrl(company.name);
@@ -336,8 +357,8 @@ export async function runPipeline(triggerType: "manual" | "scheduled") {
       }
     }
 
-    // ── Step 5: Gartner insights ─────────────────────────────────────────────
-    const gartnerCompanies = activeCompanies.filter((c) => c.gartnerUrl);
+    // ── Step 5: Gartner insights (tracked vendors only) ──────────────────────
+    const gartnerCompanies = trackedCompanies.filter((c) => c.gartnerUrl);
     if (gartnerCompanies.length > 0) {
       for (const company of gartnerCompanies) {
         try {
@@ -400,6 +421,114 @@ export async function runPipeline(triggerType: "manual" | "scheduled") {
           console.error(msg);
           stepErrors.push(msg);
         }
+      }
+    }
+
+    // ── Step 5.5: Client Watch — engager scrape + cross-reference ───────────
+    // For every competitor post posted in the last 14 days, scrape who liked /
+    // commented / reposted. Cross-reference engagers against the client
+    // employee roster + headline scan. Also scan posts inserted this run for
+    // cross-side mentions, and detect personnel moves between client and
+    // competitor companies.
+    if (clientCompanies.length > 0) {
+      try {
+        const competitorCompanyIds = trackedCompanies
+          .filter((c) => c.category === "competitor")
+          .map((c) => c.id);
+
+        if (competitorCompanyIds.length > 0) {
+          const fourteenDaysAgo = new Date(
+            Date.now() - 14 * 86400000,
+          ).toISOString();
+          const recentCompetitorPosts = await db
+            .select({
+              postId: companyPosts.id,
+              postUrl: companyPosts.linkedinPostId,
+              companyId: companyPosts.companyId,
+            })
+            .from(companyPosts)
+            .where(
+              and(
+                inArray(companyPosts.companyId, competitorCompanyIds),
+                // postedAt is text; gte works on ISO strings
+                // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
+                gte(companyPosts.postedAt, fourteenDaysAgo),
+              ),
+            )
+            .all();
+
+          // Extract URN per post (URL → activity ID → urn:li:activity:<id>)
+          type PostRef = {
+            postId: number;
+            urn: string;
+            companyId: number;
+          };
+          const postRefs: PostRef[] = [];
+          const postCompetitorMap = new Map<number, number>();
+          for (const p of recentCompetitorPosts) {
+            const m = /activity[:-](\d{10,})/.exec(p.postUrl ?? "");
+            if (!m) continue;
+            const urn = `urn:li:activity:${m[1]}`;
+            postRefs.push({ postId: p.postId, urn, companyId: p.companyId });
+            postCompetitorMap.set(p.postId, p.companyId);
+          }
+
+          if (postRefs.length > 0) {
+            console.log(
+              `[client-watch] scraping engagers across ${postRefs.length} competitor posts`,
+            );
+            const urns = postRefs.map((p) => p.urn);
+            const engagerResult = await scrapeEngagers(urns, {
+              maxLikesPerPost: 100,
+            });
+            console.log(
+              `[client-watch] ${engagerResult.data.length} raw engagements`,
+            );
+
+            const inserted = await persistEngagements(
+              engagerResult.data,
+              runId,
+            );
+            console.log(`[client-watch] ${inserted.length} new engagements stored`);
+
+            const roster = await buildClientRoster();
+            console.log(
+              `[client-watch] roster: ${roster.byProfileUrl.size} known profiles, ${roster.byName.length} client names`,
+            );
+
+            const interactionsFromEngagement = await recordEngagementInteractions({
+              engagements: inserted,
+              postCompetitorMap,
+              roster,
+              runId,
+            });
+            console.log(
+              `[client-watch] post_engagement signals: ${interactionsFromEngagement}`,
+            );
+          }
+        }
+
+        // Mention scan — text search this run's new posts
+        const mentions =
+          (await scanMentions({
+            runId,
+            sourceCategory: "client",
+            targetCategory: "competitor",
+          })) +
+          (await scanMentions({
+            runId,
+            sourceCategory: "competitor",
+            targetCategory: "client",
+          }));
+        if (mentions) console.log(`[client-watch] post_mention signals: ${mentions}`);
+
+        // Personnel move detection — join 'left'/'joined' events recorded this run
+        const moves = await scanPersonnelMoves(runId);
+        if (moves) console.log(`[client-watch] personnel_move signals: ${moves}`);
+      } catch (e) {
+        const msg = `Client Watch: ${e instanceof Error ? e.message : String(e)}`;
+        console.error(msg);
+        stepErrors.push(msg);
       }
     }
 

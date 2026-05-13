@@ -1,5 +1,6 @@
 import { Resend } from "resend";
 import { generateWeeklyDigest } from "../analysis/digest-generator";
+import { recentClientInteractions } from "../analysis/client-watch";
 import {
   parseDigestMarkdown,
   renderDigestHtml,
@@ -51,6 +52,12 @@ export async function sendWeeklyDigest(input: WeeklyDigestInput): Promise<void> 
   // Pull real stats from the DB (totalCompanies, active, posts, interesting, jobs)
   const digest = await generateWeeklyDigest();
 
+  // Client-watch: pull top 5 ranked interactions from the last 7 days
+  const clientInteractions = await recentClientInteractions({
+    sinceDays: 7,
+    limit: 5,
+  });
+
   const parsed = parseDigestMarkdown(input.summaryMarkdown);
   const now = new Date();
   const data: DigestData = {
@@ -62,6 +69,14 @@ export async function sendWeeklyDigest(input: WeeklyDigestInput): Promise<void> 
     summary: digest.summary,
     sections: parsed.sections,
     stepErrors: input.stepErrors,
+    clientInteractions: clientInteractions.map((c) => ({
+      signalType: c.signalType,
+      clientName: c.clientName,
+      competitorName: c.competitorName,
+      summary: c.summary ?? "",
+      engagerName: c.engagerName ?? undefined,
+      matchedBy: c.matchedBy ?? undefined,
+    })),
     meta: {
       runId: input.runId,
       companiesCount: input.companiesCount,

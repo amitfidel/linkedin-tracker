@@ -15,6 +15,11 @@ export const companies = sqliteTable("companies", {
   logoUrl: text("logo_url"),
   isActive: integer("is_active", { mode: "boolean" }).default(true),
   gartnerUrl: text("gartner_url"),
+  // 'self' (Sepio's own — Sepio + agrint, excluded from competitor checks)
+  // 'competitor' (Armis, Claroty — posts get engager-scraped, mentions matter)
+  // 'client' (imported via scripts/import-clients.ts — employees become the
+  //          roster used to attribute competitor-post engagers)
+  category: text("category").notNull().default("self"),
   createdAt: text("created_at").default(sql`CURRENT_TIMESTAMP`),
   updatedAt: text("updated_at").default(sql`CURRENT_TIMESTAMP`),
 });
@@ -164,6 +169,70 @@ export const gartnerInsights = sqliteTable(
   ]
 );
 
+// ── Client-watch tables ──────────────────────────────────────────────────────
+
+export const postEngagements = sqliteTable(
+  "post_engagements",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    postId: integer("post_id")
+      .notNull()
+      .references(() => companyPosts.id, { onDelete: "cascade" }),
+    engagerName: text("engager_name"),
+    engagerLinkedinUrl: text("engager_linkedin_url"),
+    engagerHeadline: text("engager_headline"),
+    engagementType: text("engagement_type").notNull(), // 'like' | 'comment' | 'repost'
+    commentText: text("comment_text"), // only set when engagementType = 'comment'
+    engagedAt: text("engaged_at"),
+    scrapedAt: text("scraped_at").default(sql`CURRENT_TIMESTAMP`),
+    scrapeRunId: integer("scrape_run_id").references(() => scrapeRuns.id),
+  },
+  (table) => [
+    // Dedup key — same engager + same engagement type on the same post is one row
+    index("idx_engagements_dedup").on(
+      table.postId,
+      table.engagerLinkedinUrl,
+      table.engagementType,
+    ),
+    // Fast lookup by engager URL for the cross-reference step
+    index("idx_engagements_engager").on(table.engagerLinkedinUrl),
+  ],
+);
+
+export const clientInteractions = sqliteTable(
+  "client_interactions",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    clientCompanyId: integer("client_company_id")
+      .notNull()
+      .references(() => companies.id, { onDelete: "cascade" }),
+    competitorCompanyId: integer("competitor_company_id")
+      .notNull()
+      .references(() => companies.id, { onDelete: "cascade" }),
+    signalType: text("signal_type").notNull(), // 'post_engagement' | 'post_mention' | 'personnel_move'
+    postId: integer("post_id").references(() => companyPosts.id, {
+      onDelete: "set null",
+    }),
+    personnelChangeId: integer("personnel_change_id").references(
+      () => personnelChanges.id,
+      { onDelete: "set null" },
+    ),
+    engagerName: text("engager_name"),
+    engagerProfileUrl: text("engager_profile_url"),
+    summary: text("summary"),
+    matchedBy: text("matched_by"), // 'profile_url' | 'headline' | null
+    detectedAt: text("detected_at").default(sql`CURRENT_TIMESTAMP`),
+    scrapeRunId: integer("scrape_run_id").references(() => scrapeRuns.id),
+  },
+  (table) => [
+    index("idx_client_interactions_client").on(
+      table.clientCompanyId,
+      table.detectedAt,
+    ),
+    index("idx_client_interactions_signal").on(table.signalType),
+  ],
+);
+
 // Type exports
 export type Company = typeof companies.$inferSelect;
 export type NewCompany = typeof companies.$inferInsert;
@@ -175,3 +244,7 @@ export type ScrapeRun = typeof scrapeRuns.$inferSelect;
 export type ScheduleConfig = typeof scheduleConfig.$inferSelect;
 export type GartnerInsight = typeof gartnerInsights.$inferSelect;
 export type NewGartnerInsight = typeof gartnerInsights.$inferInsert;
+export type PostEngagement = typeof postEngagements.$inferSelect;
+export type NewPostEngagement = typeof postEngagements.$inferInsert;
+export type ClientInteraction = typeof clientInteractions.$inferSelect;
+export type NewClientInteraction = typeof clientInteractions.$inferInsert;

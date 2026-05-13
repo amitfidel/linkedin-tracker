@@ -5,7 +5,7 @@ import {
   gartnerInsights,
   scrapeRuns,
 } from "@/db/schema";
-import { eq, gte, desc, and } from "drizzle-orm";
+import { eq, gte, desc, and, inArray } from "drizzle-orm";
 import {
   categorizePost,
   categorizeBatchLLM,
@@ -68,7 +68,13 @@ async function collectInterestingPosts(sinceDays = 7): Promise<PostForSummary[]>
     })
     .from(companyPosts)
     .innerJoin(companies, eq(companyPosts.companyId, companies.id))
-    .where(eq(companies.isActive, true))
+    .where(
+      and(
+        eq(companies.isActive, true),
+        // Clients don't get their own post stream scraped — exclude defensively.
+        inArray(companies.category, ["self", "competitor"]),
+      ),
+    )
     .orderBy(desc(companyPosts.postedAt));
 
   const filtered = rows.filter((r) => {
