@@ -25,6 +25,7 @@ import { detectPersonnelChanges } from "./diff-detector";
 import { generateAISummary } from "../analysis/ai-summarizer";
 import { scrapeGartnerInsights, discoverGartnerUrl } from "../gartner/scraper";
 import { sendWeeklyDigest } from "../email/weekly-digest";
+import { syncToObsidian } from "../obsidian/sync";
 import { scrapeEngagers } from "../linkedin/engagers-scraper";
 import {
   buildClientRoster,
@@ -551,6 +552,19 @@ export async function runPipeline(triggerType: "manual" | "scheduled") {
       summaryMarkdown = await generateAISummary(true); // force-refresh so summary reflects latest data
     } catch (e) {
       console.warn("AI summary generation failed (non-critical):", e instanceof Error ? e.message : e);
+    }
+
+    // ── Obsidian vault sync (non-blocking) ────────────────────────────────────
+    // Always run after a scrape — refreshes the bipartite graph vault with
+    // the latest rosters + interactions. Skips gracefully if the vault path
+    // isn't reachable.
+    try {
+      await syncToObsidian();
+    } catch (e) {
+      console.warn(
+        "Obsidian sync failed (non-critical):",
+        e instanceof Error ? e.message : e,
+      );
     }
 
     // ── Weekly digest email (scheduled runs only, non-blocking) ───────────────
