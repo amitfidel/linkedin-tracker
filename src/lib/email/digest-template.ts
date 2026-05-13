@@ -52,6 +52,7 @@ export interface DigestClientInteraction {
   summary: string;
   engagerName?: string;
   matchedBy?: "profile_url" | "headline" | string;
+  alreadyAlerted?: boolean;
 }
 
 export interface DigestData {
@@ -448,10 +449,13 @@ export function renderDigestHtml(d: DigestData): string {
               const matchTag = ci.matchedBy
                 ? `<span style="font-family:${MONO};font-size:9px;letter-spacing:1.4px;color:${INK_DIM};text-transform:uppercase;margin-left:8px;">via ${escape(ci.matchedBy)}</span>`
                 : "";
+              const alertedTag = ci.alreadyAlerted
+                ? `<span style="font-family:${MONO};font-size:9px;letter-spacing:1.4px;color:${INK_DIM};text-transform:uppercase;margin-left:8px;">🔔 slack-notified</span>`
+                : "";
               return `<table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="border-top:${borderTop};padding:18px 0;margin:0;">
                 <tr>
                   <td style="font-family:${MONO};font-size:10px;letter-spacing:1.6px;color:${INK_DIM};text-transform:uppercase;width:120px;vertical-align:top;">${escape(clientLabelForSignal(ci.signalType))}</td>
-                  <td style="font-family:${SANS};font-size:14px;font-weight:700;color:${clientColor};letter-spacing:0.3px;text-transform:uppercase;vertical-align:top;">${escape(ci.clientName)}<span style="color:${INK_DIM};font-weight:400;text-transform:none;letter-spacing:0;"> ↔ </span><span style="color:${colorForCompany(ci.competitorName)};">${escape(ci.competitorName)}</span>${matchTag}</td>
+                  <td style="font-family:${SANS};font-size:14px;font-weight:700;color:${clientColor};letter-spacing:0.3px;text-transform:uppercase;vertical-align:top;">${escape(ci.clientName)}<span style="color:${INK_DIM};font-weight:400;text-transform:none;letter-spacing:0;"> ↔ </span><span style="color:${colorForCompany(ci.competitorName)};">${escape(ci.competitorName)}</span>${matchTag}${alertedTag}</td>
                 </tr>
                 <tr>
                   <td></td>

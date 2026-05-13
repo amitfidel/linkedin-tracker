@@ -223,6 +223,10 @@ export const clientInteractions = sqliteTable(
     matchedBy: text("matched_by"), // 'profile_url' | 'headline' | null
     detectedAt: text("detected_at").default(sql`CURRENT_TIMESTAMP`),
     scrapeRunId: integer("scrape_run_id").references(() => scrapeRuns.id),
+    // Set when this signal has been pushed to a real-time channel (Slack).
+    // Null = not yet alerted; used to gate Slack notifications + filter
+    // already-pushed signals out of the weekly digest's Client Watch list.
+    alertedAt: text("alerted_at"),
   },
   (table) => [
     index("idx_client_interactions_client").on(
@@ -230,6 +234,36 @@ export const clientInteractions = sqliteTable(
       table.detectedAt,
     ),
     index("idx_client_interactions_signal").on(table.signalType),
+  ],
+);
+
+/**
+ * Append-only log of "we saw this profile at this company at this time".
+ * Drives the personnel-move detector: when the same profile URL appears
+ * at company A in one observation and company B in a later observation,
+ * and the categories cross (client ↔ competitor), that's a real move.
+ *
+ * Source can be:
+ *   - 'roster'      — scraped from a company's /people/ tab
+ *   - 'engagement'  — inferred from an engager's headline ("VP at Wells Fargo")
+ */
+export const peopleObservations = sqliteTable(
+  "people_observations",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    linkedinProfileUrl: text("linkedin_profile_url").notNull(),
+    companyId: integer("company_id")
+      .notNull()
+      .references(() => companies.id, { onDelete: "cascade" }),
+    name: text("name"),
+    headline: text("headline"),
+    source: text("source").notNull(), // 'roster' | 'engagement'
+    observedAt: text("observed_at").default(sql`CURRENT_TIMESTAMP`),
+    scrapeRunId: integer("scrape_run_id").references(() => scrapeRuns.id),
+  },
+  (table) => [
+    index("idx_obs_profile").on(table.linkedinProfileUrl, table.observedAt),
+    index("idx_obs_run").on(table.scrapeRunId),
   ],
 );
 
@@ -248,3 +282,5 @@ export type PostEngagement = typeof postEngagements.$inferSelect;
 export type NewPostEngagement = typeof postEngagements.$inferInsert;
 export type ClientInteraction = typeof clientInteractions.$inferSelect;
 export type NewClientInteraction = typeof clientInteractions.$inferInsert;
+export type PeopleObservation = typeof peopleObservations.$inferSelect;
+export type NewPeopleObservation = typeof peopleObservations.$inferInsert;

@@ -1,0 +1,199 @@
+/**
+ * Slack alerts for high-strength client interactions.
+ *
+ * One incoming webhook URL is all we need. Skips silently when
+ * SLACK_WEBHOOK_URL is not configured, so the pipeline keeps working
+ * for users who don't want real-time pings.
+ *
+ *   SLACK_WEBHOOK_URL=https://hooks.slack.com/services/.../...
+ *   SLACK_MIN_STRENGTH=70   (optional, default 70)
+ */
+import { db } from "@/db";
+import { clientInteractions, companies, companyPosts } from "@/db/schema";
+import { and, eq, isNull, inArray, sql } from "drizzle-orm";
+
+export interface SignalForAlert {
+  id: number;
+  clientName: string;
+  competitorName: string;
+  signalType: string;
+  summary: string | null;
+  matchedBy: string | null;
+  engagerName: string | null;
+  engagerProfileUrl: string | null;
+  postUrl: string | null;
+}
+
+// Signal-type strength ranking. Anything ≥ SLACK_MIN_STRENGTH gets alerted.
+export function signalStrength(s: {
+  signalType: string;
+  summary: string | null;
+}): number {
+  if (s.signalType === "personnel_move") return 100;
+  if (s.signalType === "post_engagement") {
+    const sum = s.summary ?? "";
+    if (sum.includes(' commented: "')) return 80;
+    if (sum.includes(" reposted")) return 60;
+    return 40; // like
+  }
+  if (s.signalType === "post_mention") return 30;
+  return 10;
+}
+
+function emojiForSignal(t: string): string {
+  if (t === "personnel_move") return "🚨";
+  if (t === "post_engagement") return "👀";
+  if (t === "post_mention") return "💬";
+  return "•";
+}
+
+function buildBlocks(signals: SignalForAlert[]) {
+  const blocks: unknown[] = [
+    {
+      type: "header",
+      text: {
+        type: "plain_text",
+        text: `🔔 ${signals.length} new client signal${signals.length === 1 ? "" : "s"}`,
+      },
+    },
+  ];
+
+  for (const s of signals) {
+    const matchTag = s.matchedBy ? ` _via ${s.matchedBy}_` : "";
+    const lines = [
+      `${emojiForSignal(s.signalType)} *${s.clientName}* ↔ _${s.competitorName}_${matchTag}`,
+      s.summary ?? "",
+    ];
+    if (s.postUrl) lines.push(`<${s.postUrl}|open post>`);
+    blocks.push({
+      type: "section",
+      text: { type: "mrkdwn", text: lines.filter(Boolean).join("\n") },
+    });
+    blocks.push({ type: "divider" });
+  }
+
+  return blocks;
+}
+
+/**
+ * Fetch every clientInteraction with `alertedAt IS NULL` whose strength meets
+ * the threshold. Returns enriched rows with client name, competitor name,
+ * and post URL hydrated.
+ */
+export async function pendingAlerts(
+  minStrength: number,
+): Promise<SignalForAlert[]> {
+  const rows = await db
+    .select({
+      id: clientInteractions.id,
+      clientCompanyId: clientInteractions.clientCompanyId,
+      competitorCompanyId: clientInteractions.competitorCompanyId,
+      signalType: clientInteractions.signalType,
+      summary: clientInteractions.summary,
+      matchedBy: clientInteractions.matchedBy,
+      engagerName: clientInteractions.engagerName,
+      engagerProfileUrl: clientInteractions.engagerProfileUrl,
+      postId: clientInteractions.postId,
+    })
+    .from(clientInteractions)
+    .where(isNull(clientInteractions.alertedAt))
+    .all();
+
+  if (rows.length === 0) return [];
+
+  // Filter by strength
+  const strong = rows.filter((r) => signalStrength(r) >= minStrength);
+  if (strong.length === 0) return [];
+
+  // Hydrate company names + post URLs
+  const companyIds = Array.from(
+    new Set(strong.flatMap((r) => [r.clientCompanyId, r.competitorCompanyId])),
+  );
+  const nameRows = await db
+    .select({ id: companies.id, name: companies.name })
+    .from(companies)
+    .where(inArray(companies.id, companyIds))
+    .all();
+  const nameMap = new Map(nameRows.map((c) => [c.id, c.name]));
+
+  const postIds = strong
+    .map((r) => r.postId)
+    .filter((x): x is number => x != null);
+  const postRows = postIds.length
+    ? await db
+        .select({
+          id: companyPosts.id,
+          url: companyPosts.linkedinPostId,
+        })
+        .from(companyPosts)
+        .where(inArray(companyPosts.id, postIds))
+        .all()
+    : [];
+  const postMap = new Map(postRows.map((p) => [p.id, p.url]));
+
+  return strong.map((r) => ({
+    id: r.id,
+    clientName: nameMap.get(r.clientCompanyId) ?? "?",
+    competitorName: nameMap.get(r.competitorCompanyId) ?? "?",
+    signalType: r.signalType,
+    summary: r.summary,
+    matchedBy: r.matchedBy,
+    engagerName: r.engagerName,
+    engagerProfileUrl: r.engagerProfileUrl,
+    postUrl: r.postId ? (postMap.get(r.postId) ?? null) : null,
+  }));
+}
+
+/**
+ * Push pending alerts to Slack and mark them alertedAt = now().
+ * Returns the count of signals sent. No-op if SLACK_WEBHOOK_URL is unset.
+ */
+export async function dispatchSlackAlerts(): Promise<number> {
+  const webhook = process.env.SLACK_WEBHOOK_URL;
+  if (!webhook) {
+    return 0;
+  }
+  const minStrength = parseInt(process.env.SLACK_MIN_STRENGTH ?? "70", 10);
+  const signals = await pendingAlerts(minStrength);
+  if (signals.length === 0) return 0;
+
+  // Slack caps a message at 50 blocks. Each signal uses 2 (section + divider).
+  // We send up to 20 signals per message; chunk extras.
+  const CHUNK = 20;
+  let sent = 0;
+  for (let i = 0; i < signals.length; i += CHUNK) {
+    const chunk = signals.slice(i, i + CHUNK);
+    const body = {
+      text: `🔔 ${chunk.length} new client signal${chunk.length === 1 ? "" : "s"}`,
+      blocks: buildBlocks(chunk),
+    };
+    const res = await fetch(webhook, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) {
+      const txt = await res.text().catch(() => "");
+      throw new Error(`Slack webhook ${res.status}: ${txt.slice(0, 200)}`);
+    }
+    sent += chunk.length;
+  }
+
+  // Mark all signals just sent
+  const ids = signals.map((s) => s.id);
+  const now = new Date().toISOString();
+  // Batch update
+  for (let i = 0; i < ids.length; i += 100) {
+    const batch = ids.slice(i, i + 100);
+    await db
+      .update(clientInteractions)
+      .set({ alertedAt: now })
+      .where(inArray(clientInteractions.id, batch));
+  }
+
+  // Hint to other code that the alerted column may need cache busting
+  void sql;
+  void and;
+  void eq;
+  return sent;
+}

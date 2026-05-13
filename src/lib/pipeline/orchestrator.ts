@@ -34,6 +34,12 @@ import {
   scanMentions,
   scanPersonnelMoves,
 } from "../analysis/client-watch";
+import {
+  recordPeopleObservations,
+  detectMoves,
+  invalidateAliasCache,
+} from "../analysis/personnel-moves";
+import { dispatchSlackAlerts } from "../notify/slack";
 
 async function sha256(text: string): Promise<string> {
   const crypto = await import("crypto");
@@ -527,9 +533,18 @@ export async function runPipeline(triggerType: "manual" | "scheduled") {
           }));
         if (mentions) console.log(`[client-watch] post_mention signals: ${mentions}`);
 
-        // Personnel move detection — join 'left'/'joined' events recorded this run
+        // Personnel move detection — first the legacy join-on-name pass
         const moves = await scanPersonnelMoves(runId);
         if (moves) console.log(`[client-watch] personnel_move signals: ${moves}`);
+
+        // Then the observation-based detector: profile URLs that have moved
+        // across companies. Higher coverage because it sees engager headlines.
+        invalidateAliasCache();
+        const obsCount = await recordPeopleObservations(runId);
+        console.log(`[personnel-moves] recorded ${obsCount} observations`);
+        const movesV2 = await detectMoves(runId);
+        if (movesV2)
+          console.log(`[personnel-moves] cross-category transitions: ${movesV2}`);
       } catch (e) {
         const msg = `Client Watch: ${e instanceof Error ? e.message : String(e)}`;
         console.error(msg);
@@ -556,6 +571,17 @@ export async function runPipeline(triggerType: "manual" | "scheduled") {
       summaryMarkdown = await generateAISummary(true); // force-refresh so summary reflects latest data
     } catch (e) {
       console.warn("AI summary generation failed (non-critical):", e instanceof Error ? e.message : e);
+    }
+
+    // ── Slack alerts for high-strength signals (non-blocking) ────────────────
+    try {
+      const alertsSent = await dispatchSlackAlerts();
+      if (alertsSent > 0) console.log(`[slack] ${alertsSent} signals pushed`);
+    } catch (e) {
+      console.warn(
+        "Slack dispatch failed (non-critical):",
+        e instanceof Error ? e.message : e,
+      );
     }
 
     // ── Obsidian vault sync (non-blocking) ────────────────────────────────────
