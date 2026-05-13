@@ -148,19 +148,14 @@ export async function pendingAlerts(
  * Push pending alerts to Slack and mark them alertedAt = now().
  * Returns the count of signals sent. No-op if SLACK_WEBHOOK_URL is unset.
  */
-export async function dispatchSlackAlerts(): Promise<number> {
+export async function sendSlackAlert(
+  signals: SignalForAlert[],
+): Promise<void> {
   const webhook = process.env.SLACK_WEBHOOK_URL;
-  if (!webhook) {
-    return 0;
-  }
-  const minStrength = parseInt(process.env.SLACK_MIN_STRENGTH ?? "70", 10);
-  const signals = await pendingAlerts(minStrength);
-  if (signals.length === 0) return 0;
+  if (!webhook || signals.length === 0) return;
 
   // Slack caps a message at 50 blocks. Each signal uses 2 (section + divider).
-  // We send up to 20 signals per message; chunk extras.
   const CHUNK = 20;
-  let sent = 0;
   for (let i = 0; i < signals.length; i += CHUNK) {
     const chunk = signals.slice(i, i + CHUNK);
     const body = {
@@ -176,13 +171,46 @@ export async function dispatchSlackAlerts(): Promise<number> {
       const txt = await res.text().catch(() => "");
       throw new Error(`Slack webhook ${res.status}: ${txt.slice(0, 200)}`);
     }
-    sent += chunk.length;
+  }
+  void sql;
+  void and;
+  void eq;
+}
+
+// ── Top-level dispatcher: pick a channel based on env + send ────────────────
+import { sendEmailAlert } from "./email-alert";
+
+/**
+ * Sends pending high-strength alerts via the configured channel and marks
+ * them alertedAt = now(). Channel preference:
+ *   1. SLACK_WEBHOOK_URL set → Slack
+ *   2. else DIGEST_EMAIL_TO set → email (uses Resend, same as weekly digest)
+ *   3. else → skip (logs a warning)
+ *
+ * Returns the number of signals dispatched.
+ */
+export async function dispatchAlerts(): Promise<number> {
+  const minStrength = parseInt(process.env.SLACK_MIN_STRENGTH ?? "70", 10);
+  const signals = await pendingAlerts(minStrength);
+  if (signals.length === 0) return 0;
+
+  const hasSlack = !!process.env.SLACK_WEBHOOK_URL;
+  const hasEmail = !!process.env.DIGEST_EMAIL_TO;
+
+  if (hasSlack) {
+    await sendSlackAlert(signals);
+  } else if (hasEmail) {
+    await sendEmailAlert(signals);
+  } else {
+    console.warn(
+      "[alerts] no channel configured (SLACK_WEBHOOK_URL or DIGEST_EMAIL_TO)",
+    );
+    return 0;
   }
 
-  // Mark all signals just sent
+  // Mark all signals as alerted
   const ids = signals.map((s) => s.id);
   const now = new Date().toISOString();
-  // Batch update
   for (let i = 0; i < ids.length; i += 100) {
     const batch = ids.slice(i, i + 100);
     await db
@@ -191,9 +219,8 @@ export async function dispatchSlackAlerts(): Promise<number> {
       .where(inArray(clientInteractions.id, batch));
   }
 
-  // Hint to other code that the alerted column may need cache busting
-  void sql;
-  void and;
-  void eq;
-  return sent;
+  return signals.length;
 }
+
+// Legacy alias — anything that called dispatchSlackAlerts still works.
+export const dispatchSlackAlerts = dispatchAlerts;
