@@ -407,6 +407,101 @@ export async function scanPersonnelMoves(runId: number): Promise<number> {
   return count;
 }
 
+// ── Re-attribute existing engagements against a freshly-built roster ────────
+/**
+ * Scan every row in post_engagements (regardless of when it was inserted)
+ * and produce missing clientInteractions rows for any engager that now
+ * matches a client (via profile URL or headline). Idempotent — skips
+ * existing (postId, clientCompanyId, engagerProfileUrl) triples.
+ *
+ * Useful after importing a new client list or after refreshing employee
+ * rosters: lets old engagements suddenly light up without re-scraping
+ * engagers from LinkedIn.
+ */
+export async function reattributeAllEngagements(runId: number): Promise<number> {
+  const roster = await buildClientRoster();
+  console.log(
+    `[client-watch:reattribute] roster: ${roster.byProfileUrl.size} profiles, ${roster.byName.length} client names`,
+  );
+  if (roster.byProfileUrl.size === 0 && roster.byName.length === 0) {
+    console.log("[client-watch:reattribute] empty roster — nothing to match");
+    return 0;
+  }
+
+  // Pull all engagements with their post's competitorCompanyId
+  const rows = await db
+    .select({
+      id: postEngagements.id,
+      postId: postEngagements.postId,
+      engagerName: postEngagements.engagerName,
+      engagerLinkedinUrl: postEngagements.engagerLinkedinUrl,
+      engagerHeadline: postEngagements.engagerHeadline,
+      engagementType: postEngagements.engagementType,
+      commentText: postEngagements.commentText,
+      competitorCompanyId: companyPosts.companyId,
+    })
+    .from(postEngagements)
+    .innerJoin(companyPosts, eq(postEngagements.postId, companyPosts.id))
+    .innerJoin(companies, eq(companyPosts.companyId, companies.id))
+    .where(eq(companies.category, "competitor"))
+    .all();
+
+  console.log(
+    `[client-watch:reattribute] scanning ${rows.length} engagements`,
+  );
+
+  let inserted = 0;
+  for (const e of rows) {
+    const attr = attributeEngagement(
+      {
+        engagerLinkedinUrl: e.engagerLinkedinUrl ?? "",
+        engagerHeadline: e.engagerHeadline ?? undefined,
+      },
+      roster,
+    );
+    if (!attr) continue;
+
+    // Dedup: don't insert if we already have this (post, client, profile) signal
+    const existing = await db
+      .select({ id: clientInteractions.id })
+      .from(clientInteractions)
+      .where(
+        and(
+          eq(clientInteractions.clientCompanyId, attr.clientCompanyId),
+          eq(clientInteractions.postId, e.postId),
+          eq(
+            clientInteractions.engagerProfileUrl,
+            normaliseProfileUrl(e.engagerLinkedinUrl ?? ""),
+          ),
+        ),
+      )
+      .get();
+    if (existing) continue;
+
+    const summary =
+      e.engagementType === "comment"
+        ? `${e.engagerName ?? "?"} (${e.engagerHeadline ?? "?"}) commented: "${(e.commentText ?? "").slice(0, 180)}"`
+        : `${e.engagerName ?? "?"} (${e.engagerHeadline ?? "?"}) ${e.engagementType === "repost" ? "reposted" : "liked"} a competitor post`;
+
+    await db.insert(clientInteractions).values({
+      clientCompanyId: attr.clientCompanyId,
+      competitorCompanyId: e.competitorCompanyId,
+      signalType: "post_engagement",
+      postId: e.postId,
+      engagerName: e.engagerName,
+      engagerProfileUrl: normaliseProfileUrl(e.engagerLinkedinUrl ?? ""),
+      summary,
+      matchedBy: attr.matchedBy,
+      scrapeRunId: runId,
+    });
+    inserted++;
+    console.log(
+      `[client-watch:reattribute] match: ${e.engagerName} → ${attr.clientName} via ${attr.matchedBy}`,
+    );
+  }
+  return inserted;
+}
+
 // ── Aggregate query for dashboard + email ────────────────────────────────────
 /**
  * Pull recent client interactions ranked by signal strength + recency.
