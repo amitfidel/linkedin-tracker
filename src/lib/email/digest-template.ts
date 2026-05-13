@@ -55,6 +55,14 @@ export interface DigestClientInteraction {
   alreadyAlerted?: boolean;
 }
 
+export interface DigestTopAccount {
+  clientName: string;
+  score: number;
+  signalCount: number;
+  topCompetitor: string | null;
+  topSignalSummary: string | null;
+}
+
 export interface DigestData {
   date: string; // "Mon, Apr 20, 2026"
   issue: number;
@@ -71,6 +79,7 @@ export interface DigestData {
   sections: DigestSection[];
   stepErrors: string[];
   clientInteractions?: DigestClientInteraction[];
+  topAccounts?: DigestTopAccount[];
   meta: {
     runId: number;
     companiesCount: number;
@@ -321,7 +330,7 @@ function inferCategoryKey(label: string): string {
 
 // ── Render ───────────────────────────────────────────────────────────────────
 export function renderDigestHtml(d: DigestData): string {
-  const { summary, sections, meta, appUrl, stepErrors, headline, lede, pullQuote, clientInteractions } = d;
+  const { summary, sections, meta, appUrl, stepErrors, headline, lede, pullQuote, clientInteractions, topAccounts } = d;
 
   const preheader = `${summary.interestingPostsCount} material events across ${summary.companiesWithActivity}/${summary.totalCompanies} vendors · ${summary.totalPostsThisWeek} posts · ${summary.totalActiveJobs} open jobs.`;
 
@@ -429,6 +438,35 @@ export function renderDigestHtml(d: DigestData): string {
         })
         .join("")
     : `<tr><td style="padding:48px 0;text-align:center;font-family:${SERIF};font-size:18px;color:${INK_MUTED};font-style:italic;">No material events captured this week.</td></tr>`;
+
+  // ── Top Accounts block ────────────────────────────────────────────────────
+  const topAccountsHtml =
+    topAccounts && topAccounts.length > 0
+      ? `<tr><td style="padding:40px 48px 0;">
+          <div style="font-family:${MONO};font-size:11px;letter-spacing:2.4px;color:${ACCENT};text-transform:uppercase;font-weight:600;margin-bottom:12px;">§ Top accounts — 30-day warmth</div>
+          <div style="font-family:${SERIF};font-size:30px;font-weight:500;color:${INK_LOUD};letter-spacing:-0.6px;line-height:1.15;margin-bottom:8px;">Where to spend your week.</div>
+          <div style="font-family:${SANS};font-size:13px;color:${INK_DIM};margin-bottom:18px;">Ranked by weighted signal strength. Personnel moves dominate; recent comments outweigh old likes.</div>
+          ${topAccounts
+            .map((a, i) => {
+              const clientColor = colorForCompany(a.clientName);
+              const rankDigit = i + 1;
+              return `<table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="padding:14px 0;margin:0;border-top:${i === 0 ? "none" : `1px solid ${HAIR}`};">
+                <tr>
+                  <td style="width:44px;font-family:${SERIF};font-size:28px;font-weight:500;color:${INK_LOUD};letter-spacing:-0.5px;vertical-align:top;padding-top:2px;">${rankDigit}</td>
+                  <td style="vertical-align:top;">
+                    <div style="font-family:${SANS};font-size:14px;font-weight:700;color:${clientColor};letter-spacing:0.3px;text-transform:uppercase;">${escape(a.clientName)}${a.topCompetitor ? `<span style="color:${INK_DIM};font-weight:400;text-transform:none;letter-spacing:0;"> · top vs </span><span style="color:${colorForCompany(a.topCompetitor)};">${escape(a.topCompetitor)}</span>` : ""}</div>
+                    <div style="font-family:${SERIF};font-size:16px;line-height:1.5;color:${INK};margin-top:4px;">${escape(a.topSignalSummary ?? "")}</div>
+                  </td>
+                  <td style="width:80px;text-align:right;vertical-align:top;">
+                    <div style="font-family:${SERIF};font-size:30px;font-weight:500;color:${ACCENT};letter-spacing:-0.6px;line-height:1;">${a.score}</div>
+                    <div style="font-family:${MONO};font-size:9px;letter-spacing:1.4px;color:${INK_DIM};text-transform:uppercase;margin-top:4px;">${a.signalCount} signal${a.signalCount === 1 ? "" : "s"}</div>
+                  </td>
+                </tr>
+              </table>`;
+            })
+            .join("")}
+        </td></tr>`
+      : "";
 
   // ── Client Watch block ────────────────────────────────────────────────────
   const clientLabelForSignal = (s: string) => {
@@ -568,6 +606,8 @@ ${ledeHtml}
     ${sectionsHtml}
   </table>
 </td></tr>
+
+${topAccountsHtml}
 
 ${clientWatchHtml}
 

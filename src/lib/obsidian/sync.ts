@@ -26,6 +26,7 @@ import {
   clientInteractions,
 } from "@/db/schema";
 import { inArray, desc } from "drizzle-orm";
+import { computeLeadScores } from "../analysis/lead-score";
 
 const DEFAULT_VAULT_PATH =
   "C:\\Users\\amitf\\Documents\\Projects\\personal progects\\client tracker";
@@ -47,6 +48,7 @@ async function writeNote(relPath: string, content: string): Promise<void> {
 function frontmatter(
   category: string,
   c: { linkedinUrl: string; industry: string | null; website: string | null },
+  score?: number,
 ): string {
   const tag = `cybertracker/${category}`;
   const lines = [
@@ -55,10 +57,18 @@ function frontmatter(
     `category: ${category}`,
     `linkedin: ${c.linkedinUrl}`,
   ];
+  if (typeof score === "number") lines.push(`leadScore: ${score}`);
   if (c.industry) lines.push(`industry: ${c.industry}`);
   if (c.website) lines.push(`website: ${c.website}`);
   lines.push("---", "");
   return lines.join("\n");
+}
+
+function scoreBanner(score: number, topCompetitor: string | null): string {
+  if (score <= 0) return "";
+  const flame = score >= 100 ? "🔥🔥" : score >= 60 ? "🔥" : "•";
+  const tail = topCompetitor ? ` · top vs **${topCompetitor}**` : "";
+  return `> ${flame} **Warmth score: ${score}** (30-day, weighted)${tail}\n\n`;
 }
 
 function describe(d: string | null | undefined): string {
@@ -161,6 +171,10 @@ export async function syncToObsidian(): Promise<void> {
     )
     .all();
 
+  // Per-client warmth scores for the 30-day window
+  const scores = await computeLeadScores({ sinceDays: 30 });
+  const scoreByClient = new Map(scores.map((s) => [s.clientCompanyId, s]));
+
   const allInteractions = await db
     .select({
       id: clientInteractions.id,
@@ -236,11 +250,17 @@ export async function syncToObsidian(): Promise<void> {
       interactionsSection = "";
     }
 
+    const scoreRow = c.category === "client" ? scoreByClient.get(c.id) : null;
+    const banner = scoreRow
+      ? scoreBanner(scoreRow.score, scoreRow.topCompetitor)
+      : "";
+
     const md = [
-      frontmatter(c.category, c),
+      frontmatter(c.category, c, scoreRow?.score),
       `# ${c.name}`,
       "",
-      describe(c.description) ? `> ${describe(c.description)}` : "",
+      banner +
+        (describe(c.description) ? `> ${describe(c.description)}` : ""),
       "",
       `[LinkedIn](${c.linkedinUrl})${c.website ? ` · [${c.website.replace(/^https?:\/\//, "")}](${c.website})` : ""}`,
       "",

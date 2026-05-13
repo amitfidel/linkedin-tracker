@@ -7,6 +7,7 @@ import {
   clientInteractions,
 } from "@/db/schema";
 import { and, eq, gte, sql } from "drizzle-orm";
+import { computeLeadScores } from "@/lib/analysis/lead-score";
 
 /**
  * GET /api/clients
@@ -34,6 +35,12 @@ export async function GET() {
   }
 
   const sevenDaysAgo = new Date(Date.now() - 7 * 86400000).toISOString();
+
+  // Lead scores (30-day window) — once, then merge per row
+  const scores = await computeLeadScores({ sinceDays: 30 });
+  const scoreMap = new Map(
+    scores.map((s) => [s.clientCompanyId, s]),
+  );
 
   // Aggregate counts in parallel
   const out = await Promise.all(
@@ -73,15 +80,24 @@ export async function GET() {
         .limit(1)
         .get();
 
+      const scoreRow = scoreMap.get(c.id);
       return {
         ...c,
         rosterSize: rosterSize?.n ?? 0,
         weekInteractions: weekCount?.n ?? 0,
         totalInteractions: totalCount?.n ?? 0,
         latestInteraction: latest ?? null,
+        leadScore: scoreRow?.score ?? 0,
+        topCompetitor: scoreRow?.topCompetitor ?? null,
       };
     }),
   );
+
+  // Sort: hot accounts first, then alphabetic for the long tail of 0-score
+  out.sort((a, b) => {
+    if (b.leadScore !== a.leadScore) return b.leadScore - a.leadScore;
+    return a.name.localeCompare(b.name);
+  });
 
   return NextResponse.json({ clients: out });
 }

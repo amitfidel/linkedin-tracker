@@ -1,6 +1,7 @@
 import { Resend } from "resend";
 import { generateWeeklyDigest } from "../analysis/digest-generator";
 import { recentClientInteractions } from "../analysis/client-watch";
+import { computeLeadScores } from "../analysis/lead-score";
 import {
   parseDigestMarkdown,
   renderDigestHtml,
@@ -58,6 +59,16 @@ export async function sendWeeklyDigest(input: WeeklyDigestInput): Promise<void> 
     limit: 5,
   });
 
+  // Top accounts: ranked client warmth scores over 30 days
+  const leaderboard = await computeLeadScores({ sinceDays: 30 });
+  const topAccounts = leaderboard.slice(0, 5).map((r) => ({
+    clientName: r.clientName,
+    score: r.score,
+    signalCount: r.signalCount,
+    topCompetitor: r.topCompetitor,
+    topSignalSummary: r.topSignalSummary,
+  }));
+
   const parsed = parseDigestMarkdown(input.summaryMarkdown);
   const now = new Date();
   const data: DigestData = {
@@ -69,6 +80,7 @@ export async function sendWeeklyDigest(input: WeeklyDigestInput): Promise<void> 
     summary: digest.summary,
     sections: parsed.sections,
     stepErrors: input.stepErrors,
+    topAccounts,
     clientInteractions: clientInteractions.map((c) => ({
       signalType: c.signalType,
       clientName: c.clientName,

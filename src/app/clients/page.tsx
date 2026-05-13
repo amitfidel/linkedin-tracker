@@ -16,11 +16,20 @@ interface ClientRow {
   rosterSize: number;
   weekInteractions: number;
   totalInteractions: number;
+  leadScore: number;
+  topCompetitor: string | null;
   latestInteraction: {
     summary: string | null;
     signalType: string;
     detectedAt: string | null;
   } | null;
+}
+
+function scoreBadgeClass(score: number): string {
+  if (score >= 100) return "bg-rose-500/20 text-rose-600 dark:text-rose-300";
+  if (score >= 60) return "bg-amber-500/20 text-amber-700 dark:text-amber-300";
+  if (score >= 30) return "bg-sky-500/20 text-sky-700 dark:text-sky-300";
+  return "bg-muted text-muted-foreground";
 }
 
 function signalLabel(t: string): string {
@@ -80,9 +89,22 @@ export default function ClientsPage() {
                       </div>
                     )}
                     <div className="min-w-0">
-                      <div className="font-semibold truncate">{c.name}</div>
+                      <div className="font-semibold truncate flex items-center gap-2">
+                        <span className="truncate">{c.name}</span>
+                        {c.leadScore > 0 && (
+                          <span
+                            className={`text-[10px] font-mono px-1.5 py-0.5 rounded ${scoreBadgeClass(c.leadScore)}`}
+                            title={`30-day warmth score${c.topCompetitor ? ` · top vs ${c.topCompetitor}` : ""}`}
+                          >
+                            {c.leadScore}
+                          </span>
+                        )}
+                      </div>
                       <div className="text-xs text-muted-foreground truncate">
                         {c.industry ?? "—"}
+                        {c.topCompetitor && (
+                          <span> · vs {c.topCompetitor}</span>
+                        )}
                       </div>
                     </div>
                   </div>
